@@ -120,14 +120,14 @@ class SubVariancePreservingSDE(nn.Module):
 
         return x, -z
 
-    def reverse(
+    def sample(
         self,
         shape: Size = (),
         steps: int = 64,
         corrections: int = 0,
         ratio: float = 1.0,
     ) -> Tensor:
-        r"""Simulates the reverse SDE from :math:`t = 1` to :math:`0`.
+        r"""Samples from the reverse SDE.
 
         Arguments:
             shape: The batch shape.
@@ -137,7 +137,7 @@ class SubVariancePreservingSDE(nn.Module):
         """
 
         x = Normal(self.zeros, 1.0).sample(shape)
-        time = torch.linspace(1.0, 0.0, steps + 1).to(x)
+        time = torch.linspace(1.0, 0.0, steps + 1).square().to(x)
 
         with torch.no_grad():
             for t, dt in zip(time, time.diff()):
@@ -152,11 +152,8 @@ class SubVariancePreservingSDE(nn.Module):
                     x = x + (1 - alpha) * eps * s + (1 - alpha) * (2 * eps).sqrt() * z
 
                 # Predictor
-                f = -beta * (x / 2 + (1 + alpha) * self.score(x, t))
-                g = beta * (1 - alpha ** 2)
-
-                z = torch.randn_like(x)
-                x = x + f * dt + (g * dt).abs().sqrt() * z
+                f = -beta / 2 * (x + (1 + alpha) * self.score(x, t))
+                x = x + f * dt
 
         return x
 

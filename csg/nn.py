@@ -123,7 +123,7 @@ class TimeEmbedding(nn.Module):
         frequencies: The number of embedding frequencies.
     """
 
-    def __init__(self, frequencies: int = 1):
+    def __init__(self, frequencies: int = 3):
         super().__init__()
 
         self.register_buffer('frequencies', 2 ** torch.arange(frequencies) * torch.pi)
@@ -147,7 +147,7 @@ class ScoreMLP(nn.Module):
     def __init__(
         self,
         features: int,
-        frequencies: int = 1,
+        frequencies: int = 3,
         **kwargs,
     ):
         super().__init__()
@@ -178,7 +178,7 @@ class ScoreCNN(nn.Module):
     def __init__(
         self,
         channels: int,
-        frequencies: int = 1,
+        frequencies: int = 3,
         **kwargs,
     ):
         super().__init__()

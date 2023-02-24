@@ -1,7 +1,17 @@
 r"""Markov chains"""
 
 import abc
+import jax
+import jax.numpy as jnp
+import jax.random as rng
+import math
+import random
 import torch
+
+try:
+    import jax_cfd.base as cfd
+except:
+    pass
 
 from torch import Tensor, Size
 from torch.distributions import MultivariateNormal
@@ -9,10 +19,11 @@ from typing import *
 
 
 class MarkovChain(abc.ABC):
-    r"""Abstract Markov chain class
+    r"""Abstract first-order time-invariant Markov chain class
 
     Wikipedia:
         https://wikipedia.org/wiki/Markov_chain
+        https://wikipedia.org/wiki/Time-invariant_system
     """
 
     @abc.abstractmethod
@@ -27,83 +38,59 @@ class MarkovChain(abc.ABC):
 
         pass
 
-    def trajectory(self, x: Tensor, steps: int, last: bool = False) -> Tensor:
+    def trajectory(self, x: Tensor, length: int, last: bool = False) -> Tensor:
         r""" (x_0, x_1, ..., x_n) ~ p(x_0) \prod_i p(x_i | x_{i-1}) """
 
         if last:
-            for _ in range(steps):
+            for _ in range(length):
                 x = self.transition(x)
 
             return x
         else:
             X = [x]
 
-            for _ in range(steps):
+            for _ in range(length):
                 x = self.transition(x)
                 X.append(x)
 
             return torch.stack(X)
 
 
-class LinearGaussian(MarkovChain):
-    r"""Linear-Gaussian Markov chain"""
+class DampedSpring(MarkovChain):
+    r"""Linearized dynamics of a mass attached to a spring, subject to wind and drag."""
 
-    def __init__(
-        self,
-        mu_0: Tensor,
-        Sigma_0: Tensor,
-        A: Tensor,
-        b: Tensor,
-        Sigma_x: Tensor,
-    ):
+    def __init__(self, dt: float = 0.01):
         super().__init__()
 
-        self.mu_0, self.Sigma_0 = mu_0, Sigma_0
-        self.A, self.b, self.Sigma_x = A, b, Sigma_x
+        self.mu_0 = torch.tensor([1.0, 0.0, 0.0, 0.0])
+        self.Sigma_0 = torch.tensor([1.0, 1.0, 1.0, 1.0]).diag()
 
-    def prior(self, shape: Size = ()) -> Tensor:
-        r""" x_0 ~ N(\mu_0, \Sigma_0) """
-
-        return MultivariateNormal(self.mu_0, self.Sigma_0).sample(shape)
-
-    def transition(self, x: Tensor) -> Tensor:
-        r""" x_i ~ N(A x_{i-1} + b, \Sigma_x) """
-
-        return MultivariateNormal(x @ self.A.T, self.Sigma_x).sample()
-
-
-class DampedSpring(LinearGaussian):
-    r"""Damped Spring hidden Markov model
-
-    This class describes the (linearized) dynamics of a mass attached to a spring,
-    subject to wind and friction.
-    """
-
-    def __init__(self, dt: float = 0.1):
-        # Prior
-        mu_0 = torch.tensor([1.0, 0.0, 0.0, 0.0])
-        Sigma_0 = torch.tensor([1.0, 1.0, 1.0, 1.0]).diag()
-
-        # Transition
-        A = torch.tensor([
+        self.A = torch.tensor([
             [1.0, dt, dt**2 / 2, 0.0],
             [0.0, 1.0, dt, 0.0],
             [-0.5, -0.1, 0.0, 0.2],
             [0.0, 0.0, 0.0, 0.99],
         ])
-        b = torch.zeros(4)
-        Sigma_x = torch.tensor([0.1, 0.1, 0.1, 1.0]).diag() * dt
+        self.b = torch.tensor([0.0, 0.0, 0.0, 0.0])
+        self.Sigma_x = torch.tensor([0.1, 0.1, 0.1, 1.0]).diag() * dt
 
-        super().__init__(mu_0, Sigma_0, A, b, Sigma_x)
+    def prior(self, shape: Size = ()) -> Tensor:
+        return MultivariateNormal(self.mu_0, self.Sigma_0).sample(shape)
+
+    def transition(self, x: Tensor) -> Tensor:
+        return MultivariateNormal(x @ self.A.T + self.b, self.Sigma_x).sample()
 
 
-class DifferentialGaussian(MarkovChain):
-    r"""Differential-Gaussian Markov chain"""
+class DiscreteODE(MarkovChain):
+    r"""Discretized ordinary differential equation (ODE)
 
-    def __init__(self, wiener: float = 1.0, dt: float = 0.01, steps: int = 1):
+    Wikipedia:
+        https://wikipedia.org/wiki/Ordinary_differential_equation
+    """
+
+    def __init__(self, dt: float = 0.01, steps: int = 1):
         super().__init__()
 
-        self.wiener = wiener
         self.dt, self.steps = dt, steps
 
     @staticmethod
@@ -131,11 +118,11 @@ class DifferentialGaussian(MarkovChain):
         for _ in range(self.steps):
             x = self.rk4(self.f, x, self.dt / self.steps)
 
-        return torch.normal(x, self.wiener * self.dt**0.5)
+        return x
 
 
-class Lorenz63(DifferentialGaussian):
-    r"""Lorenz 1963 as a Markov chain
+class Lorenz63(DiscreteODE):
+    r"""Lorenz 1963 dynamics
 
     Wikipedia:
         https://wikipedia.org/wiki/Lorenz_system
@@ -170,8 +157,8 @@ class Lorenz63(DifferentialGaussian):
         ), dim=-1)
 
 
-class Lorenz96(DifferentialGaussian):
-    r"""Lorenz 1996 as a Markov chain
+class Lorenz96(DiscreteODE):
+    r"""Lorenz 1996 dynamics
 
     Wikipedia:
         https://wikipedia.org/wiki/Lorenz_96_model
@@ -196,8 +183,8 @@ class Lorenz96(DifferentialGaussian):
         return (x1 - x2) * x3 - x + self.F
 
 
-class LotkaVolterra(DifferentialGaussian):
-    r"""Lotka-Volterra as a Markov chain
+class LotkaVolterra(DiscreteODE):
+    r"""Lotka-Volterra dynamics
 
     Wikipedia:
         https://wikipedia.org/wiki/Lotka-Volterra_equations
@@ -224,3 +211,129 @@ class LotkaVolterra(DifferentialGaussian):
             self.alpha - self.beta * x[..., 1].exp(),
             self.delta * x[..., 0].exp() - self.gamma,
         ), dim=-1)
+
+
+class KolmogorovFlow(MarkovChain):
+    r"""2-D fluid dynamics with Kolmogorov forcing
+
+    Wikipedia:
+        https://wikipedia.org/wiki/Navier-Stokes_equations
+    """
+
+    def __init__(
+        self,
+        size: int = 256,
+        dt: float = 0.01,
+        reynolds: int = 1e3,
+    ):
+        super().__init__()
+
+        grid = cfd.grids.Grid(
+            shape=(size, size),
+            domain=((0, 2 * math.pi), (0, 2 * math.pi)),
+        )
+
+        bc = cfd.boundaries.periodic_boundary_conditions(2)
+
+        forcing = cfd.forcings.simple_turbulence_forcing(
+            grid=grid,
+            constant_magnitude=1.0,
+            constant_wavenumber=4.0,
+            linear_coefficient=-0.1,
+            forcing_type='kolmogorov',
+        )
+
+        dt_min = cfd.equations.stable_time_step(
+            grid=grid,
+            max_velocity=5.0,
+            max_courant_number=0.5,
+            viscosity=1 / reynolds,
+        )
+
+        if dt_min > dt:
+            steps = 1
+        else:
+            steps = math.ceil(dt / dt_min)
+
+        step = cfd.funcutils.repeated(
+            f=cfd.equations.semi_implicit_navier_stokes(
+                grid=grid,
+                forcing=forcing,
+                dt=dt / steps,
+                density=1.0,
+                viscosity=1 / reynolds,
+            ),
+            steps=steps,
+        )
+
+        def wrap(uv: jax.Array):
+            return cfd.initial_conditions.wrap_variables(
+                var=tuple(uv),
+                grid=grid,
+                bcs=(bc, bc),
+            )
+
+        def prior(key: rng.PRNGKey) -> jax.Array:
+            u, v = cfd.initial_conditions.filtered_velocity_field(
+                key,
+                grid=grid,
+                maximum_velocity=3.0,
+                peak_wavenumber=4.0,
+            )
+
+            return jnp.stack((u.data, v.data))
+
+        def transition(uv: jax.Array) -> jax.Array:
+            u, v = wrap(uv)
+            u, v = step((u, v))
+
+            return jnp.stack((u.data, v.data))
+
+        def trajectory(uv: jax.Array, length: int) -> jax.Array:
+            u, v = wrap(uv)
+            _, (u, v) = cfd.funcutils.trajectory(step, length)((u, v))
+
+            return jnp.stack((u.data, v.data), axis=1)
+
+        self._prior = jax.jit(
+            jnp.vectorize(
+                prior,
+                signature='(K)->(C,H,W)',
+            )
+        )
+
+        self._transition = jax.jit(
+            jnp.vectorize(
+                transition,
+                signature='(C,H,W)->(C,H,W)',
+            )
+        )
+
+        self._trajectory = jax.jit(
+            jnp.vectorize(
+                trajectory,
+                excluded=[1],
+                signature='(C,H,W)->(L,C,H,W)',
+            ),
+            static_argnums=[1],
+        )
+
+    def prior(self, shape: Size = ()) -> jax.Array:
+        seed = random.randrange(2**32)
+
+        key = rng.PRNGKey(seed)
+        keys = rng.split(key, Size(shape).numel())
+        keys = keys.reshape(*shape, -1)
+
+        return self._prior(keys)
+
+    def transition(self, x: jax.Array) -> jax.Array:
+        return self._transition(x)
+
+    def trajectory(self, x: jax.Array, length: int, last: bool = False) -> jax.Array:
+        X = self._trajectory(x, length)
+
+        if last:
+            return X[-1]
+        else:
+            return X

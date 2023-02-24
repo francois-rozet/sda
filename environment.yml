@@ -1,0 +1,21 @@
+name: ssm
+channels:
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - h5py=3.7.0
+  - jupyter=1.0.0
+  - numpy=1.23.5
+  - pip=22.3.1
+  - python=3.9.16
+  - pytorch=1.13.1
+  - pytorch-cuda=11.7
+  - pip:
+    - dawgz==0.4.1
+    - jax==0.4.4
+    - jaxlib==0.4.4
+    - lampe==0.7.2
+    - matplotlib==3.6.2
+    - tqdm==4.64.1
+    - zuko==0.1.4

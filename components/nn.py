@@ -1,4 +1,4 @@
-r"""Neural networks and modules."""
+r"""Neural networks and modules"""
 
 import torch
 import torch.nn as nn

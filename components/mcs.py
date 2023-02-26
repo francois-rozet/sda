@@ -1,4 +1,4 @@
-r"""Markov chains."""
+r"""Markov chains"""
 
 import abc
 import torch

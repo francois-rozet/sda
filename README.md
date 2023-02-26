@@ -1,1 +1,1 @@
-# Markov assumptions are all you need for controllable sequence generation
+# Score-based state space models

@@ -2,6 +2,13 @@
 # Others #
 ##########
 
+# Data
+.h5
+.npy
+
+# DAWGZ
+.dawgz
+
 # macOS
 .DS_Store
 

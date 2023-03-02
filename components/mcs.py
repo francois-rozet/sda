@@ -331,3 +331,19 @@ class KolmogorovFlow(MarkovChain):
         x = x.mean(axis=(-3, -1))
 
         return x
+
+    @staticmethod
+    def vorticity(x: Tensor) -> Tensor:
+        *batch, _, h, w = x.shape
+
+        y = x.reshape(-1, 2, h, w)
+        y = torch.nn.functional.pad(y, (1, 1, 1, 1), mode='circular')
+
+        du, = torch.gradient(y[:, 0], dim=-1)
+        dv, = torch.gradient(y[:, 1], dim=-2)
+
+        y = du - dv
+        y = y[:, 1:-1, 1:-1]
+        y = y.reshape(*batch, h, w)
+
+        return y

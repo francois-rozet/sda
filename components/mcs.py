@@ -95,7 +95,7 @@ class DiscreteODE(MarkovChain):
 
     @staticmethod
     def rk4(f: Callable[[Tensor], Tensor], x: Tensor, dt: float) -> Tensor:
-        r""""Performs a step of the fourth-order Runge-Kutta integration scheme.
+        r"""Performs a step of the fourth-order Runge-Kutta integration scheme.
 
         Wikipedia:
             https://wikipedia.org/wiki/Runge-Kutta_methods

@@ -1,10 +1,10 @@
 r"""Score modules"""
 
+import math
 import torch
 import torch.nn as nn
 
-from torch import Tensor, BoolTensor, Size
-from torch.distributions import Normal
+from torch import Size, Tensor, BoolTensor
 from typing import *
 from zuko.utils import broadcast
 
@@ -34,7 +34,7 @@ class ScoreNet(nn.Module):
     r"""Creates a score network.
 
     Arguments:
-        features: The number of features (last dimension).
+        features: The number of features.
         freqs: The number of embedding frequencies.
         kwargs: The keyword arguments passed to :class:`MLP` or :class:`FCNN`.
     """
@@ -133,91 +133,144 @@ class MarkovChainScoreNet(nn.Module):
         return torch.nn.functional.pad(x, (0, 0) * (x.dim() - dim % x.dim() - 1) + padding)
 
 
-class SubVariancePreservingSDE(nn.Module):
-    r"""Creates a sub-variance preserving SDE.
+class VPSDE(nn.Module):
+    r"""Creates a noise scheduler for the variance preserving (VP) SDE.
+
+    The goal of denoising score matching (DSM) is to train a score estimator
+    :math:`s_\phi(x, t)` at approximating the rescaled score
+
+    .. math:: s(x(t), t) = \sigma(t) \nabla_{x(t)} \log p(x(t))
+
+    by minimizing the rescaled score matching objective
+
+    .. math:: \arg \min_\phi \mathbb{E}_{p(x) p(t) p(x(t) | x)} \Big[ \big\|
+        s_\phi(x(t), t) - \sigma(t) \nabla_{x(t)} \log p(x(t) | x) \big\|_2^2 \Big]
+
+    where :math:`p(x)` is an unknown distribution and :math:`p(x(t) | x)` is a
+    perturbation kernel of the form
+
+    .. math:: p(x(t) | x) = \mathcal{N}(x(t) | \mu(t) x, \sigma(t)^2 I) .
+
+    In the case of the variance preserving (VP) SDE,
+
+    .. math::
+        \mu(t) & = \alpha(t) \\
+        \sigma(t)^2 & = 1 - \alpha(t)^2 + \epsilon^2
+
+    with :math:`\alpha(t) = \exp(\log(\epsilon) t^2)`. After training, we can sample
+    from :math:`p(x(0))` by first sampling :math:`x(1) \sim p(x(1)) \approx
+    \mathbb{N}(0, 1)` and then denoising it iteratively with
+
+    .. math:: x(t - \Delta t) \approx \frac{\mu(t - \Delta t)}{\mu(t)} x(t) +
+        (\frac{\mu(t - \Delta t)}{\mu(t)} \sigma(t) - \sigma(t - \Delta)) s(x(t), t)
 
     Arguments:
-        score: A score estimator.
-        shape: The shape of the state space.
+        score: A score estimator :math:`s_\phi(x, t)`.
+        shape: The event shape.
+        epsilon: A numerical stability term.
     """
 
-    def __init__(self, score: nn.Module, shape: Size):
+    def __init__(self, score: nn.Module, shape: Size, epsilon: float = 1e-3):
         super().__init__()
 
         self.score = score
+        self.shape = shape
         self.dims = len(shape)
+        self.epsilon = epsilon
 
-        self.register_buffer('zeros', torch.zeros(*shape))
+        self.register_buffer('ones', torch.ones(shape))
 
-    @staticmethod
-    def alpha(t: Tensor) -> Tensor:
-        return torch.exp(-8.0 * t**2)
+    def alpha(self, t: Tensor) -> Tensor:
+        return torch.exp(math.log(self.epsilon) * t**2)
 
-    @staticmethod
-    def beta(t: Tensor) -> Tensor:
-        return 16.0 * t
+    def mu(self, t: Tensor) -> Tensor:
+        return self.alpha(t)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tuple[Tensor, Tensor]:
-        r"""Simulates the forward SDE until :math:`t`.
+    def sigma(self, t: Tensor) -> Tensor:
+        return (1 - self.alpha(t) ** 2 + self.epsilon ** 2).sqrt()
 
-        Samples and returns
+    def forward(
+        self,
+        x: Tensor,
+        t: Tensor,
+        train: bool = False,
+    ) -> Tensor:
+        r"""Samples from the perturbation kernel :math:`p(x(t) | x)`."""
 
-        .. math:: x(t) ~ N(x(t) | \sqrt{\alpha(t)} x, (1 - \alpha(t))^2 I)
-
-        as well as the rescaled score
-
-        .. math:: (1 - \alpha(t)) \nabla_{x(t)} \log p(x(t) | x) .
-        """
-
-        alpha = self.alpha(t).reshape(t.shape + (1,) * self.dims)
+        t = t.reshape(t.shape + (1,) * self.dims)
 
         z = torch.randn_like(x)
-        x = alpha.sqrt() * x + (1 - alpha) * z
+        x = self.mu(t) * x + self.sigma(t) * z
 
-        return x, -z
+        if train:
+            return x, -z
+        else:
+            return x
 
     def sample(
         self,
         shape: Size = (),
         steps: int = 64,
         corrections: int = 0,
-        ratio: float = 1.0,
+        amplitude: float = 1.0,
     ) -> Tensor:
-        r"""Samples from the reverse SDE.
+        r"""Samples from :math:`p(x(0))`.
 
         Arguments:
             shape: The batch shape.
             steps: The number of discrete time steps.
             corrections: The number of Langevin corrections per time steps.
-            ratio: The signal-to-noise ratio of Langevin steps.
+            amplitude: The amplitude of Langevin steps.
         """
 
-        x = Normal(self.zeros, 1.0).sample(shape)
+        x = torch.normal(0.0, self.ones.expand(shape + self.shape))
         time = torch.linspace(1.0, 0.0, steps + 1).square().to(x)
 
         with torch.no_grad():
             for t, dt in zip(time, time.diff()):
-                alpha, beta = self.alpha(t), self.beta(t)
+                # Predictor
+                r = self.mu(t + dt) / self.mu(t)
+                x = r * x + (r * self.sigma(t) - self.sigma(t + dt)) * self.score(x, t)
 
                 # Corrector
                 for _ in range(corrections):
                     z = torch.randn_like(x)
                     s = self.score(x, t)
-                    eps = ratio * alpha * z.square().sum() / s.square().sum()
+                    eps = amplitude * z.square().sum() / s.square().sum()
 
-                    x = x + (1 - alpha) * eps * s + (1 - alpha) * (2 * eps).sqrt() * z
-
-                # Predictor
-                f = -beta / 2 * (x + (1 + alpha) * self.score(x, t))
-                x = x + f * dt
+                    x = x + self.sigma(t + dt) * (eps * s + (2 * eps).sqrt() * z)
 
         return x
 
     def loss(self, x: Tensor) -> Tensor:
         t = x.new_empty(x.shape[:-self.dims]).uniform_()
-        x, target = self.forward(x, t)
+        x, target = self.forward(x, t, train=True)
 
         return (self.score(x, t) - target).square().mean()
+
+
+class SubVPSDE(VPSDE):
+    r"""Creates a noise scheduler for the sub-variance preserving (sub-VP) SDE.
+
+    .. math::
+        \mu(t) & = \alpha(t) \\
+        \sigma(t)^2 & = (1 - \alpha(t)^2 + \epsilon)^2
+    """
+
+    def sigma(self, t: Tensor) -> Tensor:
+        return 1 - self.alpha(t) ** 2 + self.epsilon
+
+
+class SubSubVPSDE(VPSDE):
+    r"""Creates a noise scheduler for the sub-sub-VP SDE.
+
+    .. math::
+        \mu(t) & = \alpha(t) \\
+        \sigma(t)^2 & = (1 - \alpha(t) + \epsilon)^2
+    """
+
+    def sigma(self, t: Tensor) -> Tensor:
+        return 1 - self.alpha(t) + self.epsilon
 
 
 class ComposedScore(nn.Module):
@@ -235,19 +288,20 @@ class ImputationScore(nn.Module):
         self,
         y: Tensor,
         mask: BoolTensor,
-        sigma: Union[float, Tensor] = 1e-3,
+        sde: VPSDE,
     ):
         super().__init__()
 
         self.register_buffer('y', y)
         self.register_buffer('mask', mask)
-        self.register_buffer('sigma', torch.as_tensor(sigma))
+
+        self.score = sde.score
+        self.mu = sde.mu
+        self.sigma = sde.sigma
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        alpha = SubVariancePreservingSDE.alpha(t)
-
-        s = -(x - alpha.sqrt() * self.y) / (alpha * self.sigma ** 2 + (1 - alpha) ** 2)
-        s = self.mask * s
-        s = (1 - alpha) * s
-
-        return s
+        return torch.where(
+            self.mask,
+            (self.mu(t) * self.y - x) / self.sigma(t),
+            self.score(x, t),
+        )

@@ -8,26 +8,30 @@ from torch import Size, Tensor, BoolTensor
 from typing import *
 from zuko.utils import broadcast
 
-from .nn import MLP, FCNN
+from .nn import *
 
 
-class TimeEmbedding(nn.Module):
+class TimeEmbedding(nn.Sequential):
     r"""Creates a time embedding.
 
     Arguments:
-        freqs: The number of embedding frequencies.
+        features: The number of embedding features.
     """
 
-    def __init__(self, freqs: int = 3):
-        super().__init__()
+    def __init__(self, features: int):
+        super().__init__(
+            nn.Linear(128, 256),
+            nn.SiLU(),
+            nn.Linear(256, features),
+        )
 
-        self.register_buffer('freqs', torch.arange(1, freqs + 1) * torch.pi)
+        self.register_buffer('freqs', torch.pi / 2 * 1e3 ** torch.linspace(0, 1, 64))
 
     def forward(self, t: Tensor) -> Tensor:
-        t = self.freqs * t[..., None]
+        t = self.freqs * t.unsqueeze(dim=-1)
         t = torch.cat((t.cos(), t.sin()), dim=-1)
 
-        return t
+        return super().forward(t)
 
 
 class ScoreNet(nn.Module):
@@ -35,43 +39,45 @@ class ScoreNet(nn.Module):
 
     Arguments:
         features: The number of features.
-        freqs: The number of embedding frequencies.
-        kwargs: The keyword arguments passed to :class:`MLP` or :class:`FCNN`.
+        embedding: The number of time embedding features.
     """
 
-    def __init__(
-        self,
-        features: int,
-        freqs: int = 3,
-        spatial: int = 0,
-        **kwargs,
-    ):
+    def __init__(self, features: int, embedding: int = 16, **kwargs):
         super().__init__()
 
-        self.embedding = TimeEmbedding(freqs)
+        self.embedding = TimeEmbedding(embedding)
+        self.network = MLP(features + embedding, features, **kwargs)
 
-        if spatial > 0:
-            self.network = FCNN(features + 2 * freqs, features, spatial=spatial, **kwargs)
-        else:
-            self.network = MLP(features + 2 * freqs, features, **kwargs)
-
-        self.spatial = spatial
-
-    def forward(
-        self,
-        x: Tensor,  # (*, H, W, C)
-        t: Tensor,  # (*,)
-    ) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
         t = self.embedding(t)
-        t = t.unflatten(-1, (1,) * self.spatial + (-1,))
-
         x, t = broadcast(x, t, ignore=1)
         x = torch.cat((x, t), dim=-1)
-        x = x.movedim(-1, -(self.spatial + 1))
-        x = self.network(x)
-        x = x.movedim(-(self.spatial + 1), -1)
 
-        return x
+        return self.network(x)
+
+
+class ScoreUNet(nn.Module):
+    r"""Creates a U-Net score network.
+
+    Arguments:
+        channels: The number of channels.
+        embedding: The number of time embedding features.
+    """
+
+    def __init__(self, channels: int, embedding: int = 64, **kwargs):
+        super().__init__()
+
+        self.embedding = TimeEmbedding(embedding)
+        self.network = UNet(channels, channels, embedding, **kwargs)
+
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        dims = self.network.spatial + 1
+
+        y = x.reshape(-1, *x.shape[-dims:])
+        t = t.reshape(-1)
+        t = self.embedding(t)
+
+        return self.network(y, t).reshape(x.shape)
 
 
 class MarkovChainScoreNet(nn.Module):
@@ -79,58 +85,76 @@ class MarkovChainScoreNet(nn.Module):
 
     Arguments:
         features: The number of features.
-        spatial: The number of spatial dimensions.
         order: The order of the Markov chain.
     """
 
-    def __init__(self, features: int, spatial: int = 0, order: int = 1, **kwargs):
+    def __init__(self, features: int, order: int = 1, **kwargs):
         super().__init__()
 
-        self.joint = ScoreNet(features * (order + 1), spatial=spatial, **kwargs)
-        self.marginal = ScoreNet(features * order, spatial=spatial, **kwargs)
+        if kwargs.get('spatial', 0) > 0:
+            build = ScoreUNet
+        else:
+            build = ScoreNet
 
-        self.spatial = spatial
+        self.marginal = build(features * order, **kwargs)
+        self.joint = build(features * (order + 1), **kwargs)
+
         self.order = order
 
     def forward(
         self,
-        x: Tensor,  # (*, L, H, W, C)
-        t: Tensor,  # (*,)
+        x: Tensor,  # (B, L, C, H, W)
+        t: Tensor,  # ()
     ) -> Tensor:
-        t = t.unsqueeze(-1)
-        dim = -(self.spatial + 2)
+        x_j = self.unfold(x, self.order + 1)
+        s_j = self.joint(x_j, t)
+        s_j = self.fold(s_j, self.order + 1)
 
-        x_j = x.unfold(dim, self.order + 1, 1).flatten(-2)
-        s_j = self.joint(x_j, t).unflatten(-1, (-1, self.order + 1))
-        s_j = self.fold(s_j, dim=dim - 1)
-
-        x_m = x.narrow(dim, start=1, length=x.shape[dim] - 2)
-        x_m = x_m.unfold(dim, self.order, 1).flatten(-2)
-        s_m = self.marginal(x_m, t).unflatten(-1, (-1, self.order))
-        s_m = self.fold(s_m, dim=dim - 1)
-        s_m = self.pad(s_m, (1, 1), dim=dim)
+        x_m = x[:, 1:-1]
+        x_m = self.unfold(x_m, self.order)
+        s_m = self.marginal(x_m, t)
+        s_m = self.fold(s_m, self.order)
+        s_m = self.pad(s_m, (1, 1))
 
         return s_j - s_m
 
     @staticmethod
     @torch.jit.script_if_tracing
-    def fold(x: Tensor, dim: int) -> Tensor:
-        dim = dim % x.dim()
-        x = x.movedim(dim, -1)
+    def unfold(x: Tensor, window: int) -> Tensor:
+        if window == 1:
+            return x
 
-        batch, (C, L) = x.shape[:-2], x.shape[-2:]
-        kernel = torch.eye(C).flipud().to(x).unsqueeze(0)
+        x = x.unfold(1, window, 1)
+        x = x.movedim(-1, 3)
+        x = x.flatten(2, 3)
 
-        x = x.reshape(-1, C, L)
-        x = torch.nn.functional.conv1d(x, kernel, padding=C - 1)
-        x = x.reshape(batch + (-1,))
-
-        return x.movedim(-1, dim)
+        return x
 
     @staticmethod
     @torch.jit.script_if_tracing
-    def pad(x: Tensor, padding: Tuple[int, int], dim: int) -> Tensor:
-        return torch.nn.functional.pad(x, (0, 0) * (x.dim() - dim % x.dim() - 1) + padding)
+    def fold(x: Tensor, window: int) -> Tensor:
+        if window == 1:
+            return x
+
+        kernel = torch.eye(window, dtype=x.dtype, device=x.device)
+        kernel = kernel.flipud().unsqueeze(0)
+
+        x = x.unflatten(2, (-1, window))
+        x = x.movedim((1, 3), (-1, -2))
+
+        shape = x.shape[:-2]
+
+        x = x.flatten(0, -3)
+        x = torch.nn.functional.conv1d(x, kernel, padding=window - 1)
+        x = x.reshape(shape + (-1,))
+        x = x.movedim(-1, 1)
+
+        return x
+
+    @staticmethod
+    @torch.jit.script_if_tracing
+    def pad(x: Tensor, padding: Tuple[int, int]) -> Tensor:
+        return torch.nn.functional.pad(x, (0, 0) * (x.dim() - 2) + padding)
 
 
 class VPSDE(nn.Module):
@@ -175,7 +199,6 @@ class VPSDE(nn.Module):
 
         self.score = score
         self.shape = shape
-        self.dims = len(shape)
         self.epsilon = epsilon
 
         self.register_buffer('ones', torch.ones(shape))
@@ -189,15 +212,10 @@ class VPSDE(nn.Module):
     def sigma(self, t: Tensor) -> Tensor:
         return (1 - self.alpha(t) ** 2 + self.epsilon ** 2).sqrt()
 
-    def forward(
-        self,
-        x: Tensor,
-        t: Tensor,
-        train: bool = False,
-    ) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor, train: bool = False) -> Tensor:
         r"""Samples from the perturbation kernel :math:`p(x(t) | x)`."""
 
-        t = t.reshape(t.shape + (1,) * self.dims)
+        t = t.reshape(t.shape + (1,) * len(self.shape))
 
         z = torch.randn_like(x)
         x = self.mu(t) * x + self.sigma(t) * z
@@ -223,8 +241,10 @@ class VPSDE(nn.Module):
             amplitude: The amplitude of Langevin steps.
         """
 
-        x = torch.normal(0.0, self.ones.expand(shape + self.shape))
-        time = torch.linspace(1.0, 0.0, steps + 1).square().to(x)
+        x = torch.normal(0, self.ones.expand(shape + self.shape))
+        x = x.reshape(-1, *self.shape)
+
+        time = torch.linspace(1, 0, steps + 1).square().to(x)
 
         with torch.no_grad():
             for t, dt in zip(time, time.diff()):
@@ -240,10 +260,10 @@ class VPSDE(nn.Module):
 
                     x = x + self.sigma(t + dt) * (eps * s + (2 * eps).sqrt() * z)
 
-        return x
+        return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor) -> Tensor:
-        t = x.new_empty(x.shape[:-self.dims]).uniform_()
+        t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
         x, target = self.forward(x, t, train=True)
 
         return (self.score(x, t) - target).square().mean()

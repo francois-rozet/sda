@@ -8,115 +8,172 @@ from typing import *
 from zuko.nn import LayerNorm, MLP
 
 
-class Residual(nn.Sequential):
+class ResidualBlock(nn.Sequential):
     r"""Creates a residual block."""
 
     def forward(self, x: Tensor) -> Tensor:
         return x + super().forward(x)
 
 
-class FCNN(nn.Sequential):
-    r"""Creates a fully convolutional neural network (FCNN).
-
-    The architecture is inspired by ConvNeXt blocks which mix depthwise and 1 by 1
-    convolutions to improve the efficiency/accuracy trade-off.
+class UNet(nn.Module):
+    r"""Creates a U-Net.
 
     References:
-        | A ConvNet for the 2020s (Lui et al., 2022)
-        | https://arxiv.org/abs/2201.03545
+        | U-Net: Convolutional Networks for Biomedical Image Segmentation (Ronneberger et al., 2015)
+        | https://arxiv.org/abs/1505.04597
 
     Arguments:
         in_channels: The number of input channels.
         out_channels: The number of output channels.
+        context: The number of context features.
         hidden_channels: The number of hidden channels.
-        hidden_blocks: The number of hidden blocks. Each block consists in an optional
-            normalization, a depthwise convolution, an activation and a 1 by 1
-            convolution.
+        hidden_blocks: The number of hidden blocks at each depth.
         kernel_size: The size of the convolution kernels.
         activation: The activation function constructor.
-        normalize: Whether channels are normalized or not.
         spatial: The number of spatial dimensions. Can be either 1, 2 or 3.
-        kwargs: Keyword arguments passed to :class:`torch.nn.Conv2d`.
+        kwargs: Keyword arguments passed to :class:`nn.Conv2d`.
     """
 
     def __init__(
         self,
         in_channels: int,
         out_channels: int,
-        hidden_channels: int = 64,
-        hidden_blocks: int = 3,
-        kernel_size: int = 5,
+        context: int,
+        hidden_channels: Sequence[int] = (32, 64, 128),
+        hidden_blocks: Sequence[int] = (2, 3, 5),
+        kernel_size: int = 3,
         activation: Callable[[], nn.Module] = nn.ReLU,
-        normalize: bool = False,
         spatial: int = 2,
         **kwargs,
     ):
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.spatial = spatial
+
+        # Components
         convolution = {
             1: nn.Conv1d,
             2: nn.Conv2d,
             3: nn.Conv3d,
         }.get(spatial)
 
-        if normalize:
-            normalization = lambda: LayerNorm(dim=-(spatial + 1))
-        else:
-            normalization = nn.Identity
+        block = lambda channels: nn.ModuleDict({
+            'project': nn.Linear(context, channels),
+            'residue': nn.Sequential(
+                LayerNorm(-(spatial + 1)),
+                convolution(
+                    channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                    **kwargs,
+                ),
+                activation(),
+                convolution(
+                    channels,
+                    channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2,
+                    **kwargs,
+                ),
+            ),
+        })
 
-        layers = [
-            convolution(
-                in_channels,
-                hidden_channels,
-                kernel_size=kernel_size,
-                padding=kernel_size // 2,
-                **kwargs,
-            )
-        ]
+        # Layers
+        heads, tails = [], []
+        descent, ascent = [], []
 
-        for i in range(hidden_blocks):
-            layers.append(
-                Residual(
-                    normalization(),
+        for i, blocks in enumerate(hidden_blocks):
+            if i > 0:
+                heads.append(
                     convolution(
-                        hidden_channels,
-                        hidden_channels * 2,
-                        groups=hidden_channels,
+                        hidden_channels[i - 1],
+                        hidden_channels[i],
+                        kernel_size=kernel_size,
+                        padding=kernel_size // 2,
+                        stride=2,
+                        **kwargs,
+                    )
+                )
+
+                tails.append(
+                    nn.Sequential(
+                        LayerNorm(-(spatial + 1)),
+                        nn.Upsample(scale_factor=(2,) * spatial, mode='nearest'),
+                        convolution(
+                            hidden_channels[i],
+                            hidden_channels[i - 1],
+                            kernel_size=kernel_size,
+                            padding=kernel_size // 2,
+                            **kwargs,
+                        ),
+                    )
+                )
+            else:
+                heads.append(
+                    convolution(
+                        in_channels,
+                        hidden_channels[i],
                         kernel_size=kernel_size,
                         padding=kernel_size // 2,
                         **kwargs,
-                    ),
-                    activation(),
-                    convolution(hidden_channels * 2, hidden_channels, kernel_size=1),
+                    )
                 )
-            )
 
-        layers.append(
-            convolution(
-                hidden_channels,
-                out_channels,
-                kernel_size=kernel_size,
-                padding=kernel_size // 2,
-                **kwargs,
-            )
-        )
+                tails.append(
+                    convolution(
+                        hidden_channels[i],
+                        out_channels,
+                        kernel_size=kernel_size,
+                        padding=kernel_size // 2,
+                        **kwargs,
+                    )
+                )
 
-        super().__init__(*layers)
+            descent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))
+            ascent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.spatial = spatial
+        self.heads = nn.ModuleList(heads)
+        self.tails = nn.ModuleList(reversed(tails))
+        self.descent = nn.ModuleList(descent)
+        self.ascent = nn.ModuleList(reversed(ascent))
 
-    def forward(self, x: Tensor) -> Tensor:
-        dim = -(self.spatial + 1)
+    def edit(self, block: nn.Module, x: Tensor, y: Tensor) -> Tensor:
+        y = block.project(y)
+        y = y.unflatten(-1, (-1,) + (1,) * self.spatial)
+        x = x + block.residue(x + y)
 
-        y = x.reshape(-1, *x.shape[dim:])
-        y = super().forward(y)
-        y = y.reshape(*x.shape[:dim], *y.shape[dim:])
+        return x
 
-        return y
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        memory = []
+
+        for head, blocks in zip(self.heads, self.descent):
+            x = head(x)
+
+            for block in blocks:
+                x = self.edit(block, x, y)
+
+            memory.append(x)
+
+        memory.pop()
+
+        for blocks, tail in zip(self.ascent, self.tails):
+            for block in blocks:
+                x = self.edit(block, x, y)
+
+            if memory:
+                x = tail(x) + memory.pop()
+            else:
+                x = tail(x)
+
+        return x
 
 
 class S4DLayer(nn.Module):
-    r"""Creates a structured state space sequence diagonal (S4D) layer.
+    r"""Creates a diagonal structured state space sequence (S4D) layer.
 
     References:
         | On the Parameterization and Initialization of Diagonal State Space Models (Gu et al., 2022)
@@ -182,61 +239,3 @@ class S4DBlock(nn.Module):
             self.l2r(x),
             self.r2l(x.flip(-1)).flip(-1),
         ), dim=-2)
-
-
-class S2SNN(nn.Sequential):
-    r"""Creates a sequence-to-sequence neural network (S2SNN).
-
-    Arguments:
-        in_channels: The number of input channels.
-        out_channels: The number of output channels.
-        hidden_channels: The number of hidden channels.
-        hidden_blocks: The number of hidden blocks. Each block consists in an optional
-            normalization, a S4D block, an activation and a 1 by 1 convolution.
-        activation: The activation function constructor.
-        normalize: Whether channels are normalized or not.
-        kwargs: Keyword arguments passed to :class:`S4DBlock`.
-    """
-
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        hidden_channels: int = 64,
-        hidden_blocks: int = 3,
-        activation: Callable[[], nn.Module] = nn.ReLU,
-        normalize: bool = False,
-        **kwargs,
-    ):
-        if normalize:
-            normalization = lambda: LayerNorm(dim=-2)
-        else:
-            normalization = nn.Identity
-
-        linear = lambda x, y: nn.Conv1d(x, y, kernel_size=1)
-
-        layers = [linear(in_channels, hidden_channels)]
-
-        for i in range(hidden_blocks):
-            layers.append(
-                Residual(
-                    normalization(),
-                    S4DBlock(hidden_channels, **kwargs),
-                    activation(),
-                    linear(hidden_channels * 2, hidden_channels),
-                )
-            )
-
-        layers.append(linear(hidden_channels, out_channels))
-
-        super().__init__(*layers)
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-    def forward(self, x: Tensor) -> Tensor:
-        y = x.reshape(-1, *x.shape[-2:])
-        y = super().forward(y)
-        y = y.reshape(*x.shape[:-2], *y.shape[-2:])
-
-        return y

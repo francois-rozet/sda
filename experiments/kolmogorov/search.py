@@ -1,23 +1,20 @@
 #!/usr/bin/env python
 
-import h5py
 import json
-import math
 import matplotlib.pyplot as plt
 import numpy as np
 import os
 import random
 import seaborn
-import time
 import wandb
 
 from dawgz import job, schedule
 from pathlib import Path
-from tqdm import trange
 from typing import *
 
 from components.mcs import *
 from components.score import *
+from components.utils import *
 
 
 SCRATCH = os.environ.get('SCRATCH', '.')
@@ -41,7 +38,7 @@ CONFIG = {
 }
 
 
-def build(**config) -> nn.Module:
+def build(channels: int, **config) -> nn.Module:
     activation = {
         'ReLU': nn.ReLU,
         'ELU': nn.ELU,
@@ -50,7 +47,7 @@ def build(**config) -> nn.Module:
     }.get(config['activation'])
 
     return ScoreUNet(
-        channels=2,
+        channels=channels,
         embedding=config['embedding'],
         hidden_channels=config['hidden_channels'],
         hidden_blocks=config['hidden_blocks'],
@@ -61,17 +58,7 @@ def build(**config) -> nn.Module:
     )
 
 
-def read(file: Path) -> Tensor:
-    with h5py.File(file, mode='r') as f:
-        data = f['x'][:]
-
-    data = torch.from_numpy(data)
-    data = data.reshape(-1, 2, 64, 64)
-
-    return data
-
-
-@job(array=32, cpus=2, gpus=1, ram='32GB', time='06:00:00')
+@job(array=64, cpus=2, gpus=1, ram='16GB', time='06:00:00')
 def train(i: int):
     config = {
         key: random.choice(values)
@@ -85,101 +72,35 @@ def train(i: int):
     with open(runpath / 'config.json', 'w') as f:
         json.dump(config, f)
 
-    # Data
-    trainset = read(PATH / 'data/train.h5')
-    validset = read(PATH / 'data/valid.h5')
-
     # Network
-    score = build(**config)
+    score = build(channels=2, **config)
     sde = VPSDE(score, shape=(2, 64, 64)).cuda()
 
+    # Data
+    trainset = read(PATH / 'data/train.h5', window=1)
+    validset = read(PATH / 'data/valid.h5', window=1)
+
     # Training
-    epochs = config['epochs']
-    batch_size = config['batch_size']
-    best = 0.05
+    generator = loop(
+        sde,
+        trainset,
+        validset,
+        device='cuda',
+        **config,
+    )
 
-    ## Optimizer
-    if config['optimizer'] == 'AdamW':
-        optimizer = torch.optim.AdamW(
-            score.parameters(),
-            lr=config['learning_rate'],
-            weight_decay=config['weight_decay'],
-        )
-    else:
-        raise ValueError()
-
-    if config['scheduler'] == 'linear':
-        lr = lambda t: 1 - (t / epochs)
-    elif config['scheduler'] == 'cosine':
-        lr = lambda t: (1 + math.cos(math.pi * t / epochs)) / 2
-    elif config['scheduler'] == 'exponential':
-        lr = lambda t: math.exp(-7 * (t / epochs) ** 2)
-    else:
-        raise ValueError()
-
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr)
-
-    ## Loop
-    for epoch in trange(epochs, ncols=88):
-        losses_train = []
-        losses_val = []
-
-        ### Train
-        i = np.random.choice(
-            len(trainset),
-            size=4096,
-            replace=False,
-        )
-
-        start = time.time()
-
-        for x in trainset[i].cuda().split(batch_size):
-            optimizer.zero_grad()
-            l = sde.loss(x)
-            l.backward()
-            optimizer.step()
-
-            losses_train.append(l.detach())
-
-        end = time.time()
-
-        ### Valid
-        i = np.random.choice(
-            len(validset),
-            size=1024,
-            replace=False,
-        )
-
-        with torch.no_grad():
-            for x in validset[i].cuda().split(batch_size):
-                losses_val.append(sde.loss(x))
-
-        ### Logs
-        loss_train = torch.stack(losses_train).mean().item()
-        loss_val = torch.stack(losses_val).mean().item()
-
+    for loss_train, loss_valid, lr in generator:
         run.log({
-            'loss': loss_train,
-            'loss_val': loss_val,
-            'speed': 1 / (end - start),
-            'lr': optimizer.param_groups[0]['lr'],
+            'loss_train': loss_train,
+            'loss_valid': loss_valid,
+            'lr': lr,
         })
 
-        ### Checkpoint
-        if loss_val < best * 0.95:
-            best = loss_val
-            torch.save(
-                score.state_dict(),
-                runpath / f'checkpoint_{epoch:04d}.pth',
-            )
-
-        scheduler.step()
-
-    # Load best checkpoint
-    checkpoints = sorted(runpath.glob('checkpoint_*.pth'))
-    state = torch.load(checkpoints[-1])
-
-    score.load_state_dict(state)
+    # Save
+    torch.save(
+        score.state_dict(),
+        runpath / f'state.pth',
+    )
 
     # Evaluation
     x = sde.sample((4,), steps=64).cpu()

@@ -80,7 +80,7 @@ class ScoreUNet(nn.Module):
         return self.network(y, t).reshape(x.shape)
 
 
-class MarkovChainScoreNet(nn.Module):
+class MCScoreNet(nn.Module):
     r"""Creates a score network for a Markov chain.
 
     Arguments:
@@ -91,15 +91,67 @@ class MarkovChainScoreNet(nn.Module):
     def __init__(self, features: int, order: int = 1, **kwargs):
         super().__init__()
 
+        self.order = order
+
         if kwargs.get('spatial', 0) > 0:
             build = ScoreUNet
         else:
             build = ScoreNet
 
-        self.marginal = build(features * order, **kwargs)
-        self.joint = build(features * (order + 1), **kwargs)
+        self.kernel = build(features * (2 * order + 1), **kwargs)
+
+    def forward(
+        self,
+        x: Tensor,  # (B, L, C, H, W)
+        t: Tensor,  # ()
+    ) -> Tensor:
+        x = self.unfold(x, self.order)
+        s = self.kernel(x, t)
+        s = self.fold(s, self.order)
+
+        return s
+
+    @staticmethod
+    @torch.jit.script_if_tracing
+    def unfold(x: Tensor, order: int) -> Tensor:
+        x = x.unfold(1, 2 * order + 1, 1)
+        x = x.movedim(-1, 2)
+        x = x.flatten(2, 3)
+
+        return x
+
+    @staticmethod
+    @torch.jit.script_if_tracing
+    def fold(x: Tensor, order: int) -> Tensor:
+        x = x.unflatten(2, (2 * order  + 1, -1))
+
+        return torch.cat((
+            x[:, 0, :order],
+            x[:, :, order],
+            x[:, -1, -order:],
+        ), dim=1)
+
+
+class CompositeMCScoreNet(nn.Module):
+    r"""Creates a composite score network for a Markov chain.
+
+    Arguments:
+        features: The number of features.
+        order: The order of the Markov chain.
+    """
+
+    def __init__(self, features: int, order: int = 1, **kwargs):
+        super().__init__()
 
         self.order = order
+
+        if kwargs.get('spatial', 0) > 0:
+            build = ScoreUNet
+        else:
+            build = ScoreNet
+
+        self.kernel_j = build(features * (order + 1), **kwargs)
+        self.kernel_m = build(features * order, **kwargs)
 
     def forward(
         self,
@@ -107,12 +159,12 @@ class MarkovChainScoreNet(nn.Module):
         t: Tensor,  # ()
     ) -> Tensor:
         x_j = self.unfold(x, self.order + 1)
-        s_j = self.joint(x_j, t)
+        s_j = self.kernel_j(x_j, t)
         s_j = self.fold(s_j, self.order + 1)
 
         x_m = x[:, 1:-1]
         x_m = self.unfold(x_m, self.order)
-        s_m = self.marginal(x_m, t)
+        s_m = self.kernel_m(x_m, t)
         s_m = self.fold(s_m, self.order)
         s_m = self.pad(s_m, (1, 1))
 
@@ -125,7 +177,7 @@ class MarkovChainScoreNet(nn.Module):
             return x
 
         x = x.unfold(1, window, 1)
-        x = x.movedim(-1, 3)
+        x = x.movedim(-1, 2)
         x = x.flatten(2, 3)
 
         return x
@@ -139,8 +191,8 @@ class MarkovChainScoreNet(nn.Module):
         kernel = torch.eye(window, dtype=x.dtype, device=x.device)
         kernel = kernel.flipud().unsqueeze(0)
 
-        x = x.unflatten(2, (-1, window))
-        x = x.movedim((1, 3), (-1, -2))
+        x = x.unflatten(2, (window, -1))
+        x = x.movedim((1, 2), (-1, -2))
 
         shape = x.shape[:-2]
 

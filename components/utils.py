@@ -24,7 +24,7 @@ def read(file: Path, window: int = None) -> Tensor:
         data = data.flatten(0, 1)
     else:
         data = data.unfold(1, window, 1)
-        data = data.movedim(-1, 3)
+        data = data.movedim(-1, 2)
         data = data.flatten(2, 3)
         data = data.flatten(0, 1)
 

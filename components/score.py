@@ -293,17 +293,9 @@ class SubSubVPSDE(VPSDE):
         return 1 - self.alpha(t) + self.epsilon
 
 
-class ComposedScore(nn.Module):
-    def __init__(self, *scores: nn.Module):
-        super().__init__()
-
-        self.scores = nn.ModuleList(scores)
-
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        return sum(s(x, t) for s in self.scores)
-
-
 class ImputationScore(nn.Module):
+    r"""Creates a score module for imputation problems."""
+
     def __init__(
         self,
         y: Tensor,
@@ -325,3 +317,40 @@ class ImputationScore(nn.Module):
             (self.mu(t) * self.y - x) / self.sigma(t),
             self.score(x, t),
         )
+
+
+class LinearGaussianScore(nn.Module):
+    r"""Creates a score module for linear Gaussian inverse problems."""
+
+    def __init__(
+        self,
+        y: Tensor,
+        f: Callable[[Tensor], Tensor],  # A @ x
+        diag: Union[float, Tensor],  # diag(A @ A^T)
+        noise: Union[float, Tensor],
+        sde: VPSDE,
+    ):
+        super().__init__()
+
+        self.register_buffer('y', y)
+        self.register_buffer('diag', torch.as_tensor(diag))
+        self.register_buffer('noise', torch.as_tensor(noise))
+
+        self.f = f
+        self.score = sde.score
+        self.mu = sde.mu
+        self.sigma = sde.sigma
+
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        with torch.enable_grad():
+            x = x.detach().requires_grad_(True)
+
+            err = self.f(x) - self.mu(t) * self.y
+            var = (self.mu(t) * self.noise) ** 2 + self.sigma(t) ** 2 * self.diag
+            var = var / self.sigma(t)
+
+            log_p = -(err ** 2 / var).sum() / 2
+
+        score, = torch.autograd.grad(log_p, x)
+
+        return self.score(x, t) + score

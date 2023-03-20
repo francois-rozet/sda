@@ -13,6 +13,7 @@ try:
 except:
     pass
 
+from functools import partial
 from torch import Tensor, Size
 from torch.distributions import MultivariateNormal
 from typing import *
@@ -39,7 +40,7 @@ class MarkovChain(abc.ABC):
         pass
 
     def trajectory(self, x: Tensor, length: int, last: bool = False) -> Tensor:
-        r""" (x_0, x_1, ..., x_n) ~ p(x_0) \prod_i p(x_i | x_{i-1}) """
+        r""" (x_1, ..., x_n) ~ \prod_i p(x_i | x_{i-1}) """
 
         if last:
             for _ in range(length):
@@ -47,7 +48,7 @@ class MarkovChain(abc.ABC):
 
             return x
         else:
-            X = [x]
+            X = []
 
             for _ in range(length):
                 x = self.transition(x)
@@ -273,6 +274,7 @@ class KolmogorovFlow(MarkovChain):
                 bcs=(bc, bc),
             )
 
+        @partial(jnp.vectorize, signature='(K)->(C,H,W)')
         def prior(key: rng.PRNGKey) -> jax.Array:
             u, v = cfd.initial_conditions.filtered_velocity_field(
                 key,
@@ -283,40 +285,23 @@ class KolmogorovFlow(MarkovChain):
 
             return jnp.stack((u.data, v.data))
 
+        @partial(jnp.vectorize, signature='(C,H,W)->(C,H,W)')
         def transition(uv: jax.Array) -> jax.Array:
             u, v = wrap(uv)
             u, v = step((u, v))
 
             return jnp.stack((u.data, v.data))
 
+        @partial(jnp.vectorize, signature='(C,H,W)->(L,C,H,W)', excluded=[1])
         def trajectory(uv: jax.Array, length: int) -> jax.Array:
             u, v = wrap(uv)
             _, (u, v) = cfd.funcutils.trajectory(step, length)((u, v))
 
             return jnp.stack((u.data, v.data), axis=1)
 
-        self._prior = jax.jit(
-            jnp.vectorize(
-                prior,
-                signature='(K)->(C,H,W)',
-            )
-        )
-
-        self._transition = jax.jit(
-            jnp.vectorize(
-                transition,
-                signature='(C,H,W)->(C,H,W)',
-            )
-        )
-
-        self._trajectory = jax.jit(
-            jnp.vectorize(
-                trajectory,
-                excluded=[1],
-                signature='(C,H,W)->(L,C,H,W)',
-            ),
-            static_argnums=[1],
-        )
+        self._prior = jax.jit(prior)
+        self._transition = jax.jit(transition)
+        self._trajectory = jax.jit(trajectory, static_argnums=[1])
 
     def prior(self, shape: Size = ()) -> jax.Array:
         seed = random.randrange(2**32)
@@ -337,3 +322,12 @@ class KolmogorovFlow(MarkovChain):
             return X[-1]
         else:
             return X
+
+    @staticmethod
+    def coarsen(x: jax.Array, r: int = 2) -> jax.Array:
+        *batch, h, w = x.shape
+
+        x = x.reshape(*batch, h // r, r, w // r, r)
+        x = x.mean(axis=(-3, -1))
+
+        return x

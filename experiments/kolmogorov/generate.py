@@ -25,8 +25,8 @@ def simulate(i: int):
     random.seed(i)
 
     x = chain.prior()
-    x = chain.trajectory(x, length=16 + 32)
-    x = x[16:]
+    x = chain.trajectory(x, length=128)
+    x = x[64:]
 
     np.save(path / f'x_{i:06d}.npy', x)
 
@@ -50,12 +50,12 @@ def aggregate():
         with h5py.File(path / f'{name}.h5', mode='w') as f:
             f.create_dataset(
                 'x',
-                shape=(len(files), 32, 2, 256, 256),
+                shape=(len(files), 64, 2, 64, 64),
                 dtype=np.float32,
             )
 
             for i, x in enumerate(map(np.load, files)):
-                f['x'][i] = x
+                f['x'][i] = KolmogorovFlow.coarsen(x, 4)
 
 
 if __name__ == '__main__':

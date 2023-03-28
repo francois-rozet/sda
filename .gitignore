@@ -3,11 +3,14 @@
 ##########
 
 # Data
-.h5
-.npy
+*.h5
+*.npy
 
 # DAWGZ
-.dawgz
+.dawgz/
+
+# W&B
+wandb/
 
 # macOS
 .DS_Store

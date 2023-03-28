@@ -227,9 +227,10 @@ class VPSDE(nn.Module):
 
         self.score = score
         self.shape = shape
+        self.dims = tuple(range(-len(shape), 0))
         self.epsilon = epsilon
 
-        self.register_buffer('ones', torch.ones(shape))
+        self.register_buffer('device', torch.empty(()))
 
     def alpha(self, t: Tensor) -> Tensor:
         return torch.exp(math.log(self.epsilon) * t**2)
@@ -269,7 +270,7 @@ class VPSDE(nn.Module):
             amplitude: The amplitude of Langevin steps.
         """
 
-        x = torch.normal(0, self.ones.expand(shape + self.shape))
+        x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
 
         time = torch.linspace(1, 0, steps + 1).square().to(x)
@@ -283,10 +284,11 @@ class VPSDE(nn.Module):
                 # Corrector
                 for _ in range(corrections):
                     z = torch.randn_like(x)
-                    s = self.score(x, t)
-                    eps = amplitude * z.square().sum() / s.square().sum()
+                    s = self.score(x, t + dt)
+                    eps = amplitude / s.square().mean(dim=self.dims, keepdim=True)
 
-                    x = x + self.sigma(t + dt) * (eps * s + (2 * eps).sqrt() * z)
+                    dx = eps * s + (2 * eps).sqrt() * z
+                    x = x + self.sigma(t + dt) * dx
 
         return x.reshape(shape + self.shape)
 

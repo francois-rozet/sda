@@ -131,9 +131,9 @@ class Lorenz63(DiscreteODE):
 
     def __init__(
         self,
-        sigma: float = 10.0,
-        rho: float = 28.0,
-        beta: float = 8 / 3,
+        sigma: float = 10.0,  # [9, 13]
+        rho: float = 28.0,  # [28, 40]
+        beta: float = 8 / 3,  # [1, 3]
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -141,14 +141,14 @@ class Lorenz63(DiscreteODE):
         self.sigma, self.rho, self.beta = sigma, rho, beta
 
     def prior(self, shape: Size = ()) -> Tensor:
-        modes = torch.tensor([
-            [self.sigma, self.sigma, self.rho],
-            [-self.sigma, -self.sigma, self.rho],
+        mu = torch.tensor([0.0, 0.0, 25.0])
+        sigma = torch.tensor([
+            [64.0, 50.0,  0.0],
+            [50.0, 81.0,  0.0],
+            [ 0.0,  0.0, 75.0],
         ])
 
-        i = torch.randint(2, shape)
-
-        return torch.normal(modes[i], self.sigma / 4)
+        return MultivariateNormal(mu, sigma).sample(shape)
 
     def f(self, x: Tensor) -> Tensor:
         return torch.stack((
@@ -156,6 +156,30 @@ class Lorenz63(DiscreteODE):
             x[..., 0] * (self.rho - x[..., 2]) - x[..., 1],
             x[..., 0] * x[..., 1] - self.beta * x[..., 2],
         ), dim=-1)
+
+    @staticmethod
+    def preprocess(x: Tensor) -> Tensor:
+        mu = x.new_tensor([0.0, 0.0, 25.0])
+        sigma = x.new_tensor([8.0, 9.0, 8.6])
+
+        return (x - mu) / sigma
+
+    @staticmethod
+    def postprocess(x: Tensor) -> Tensor:
+        mu = x.new_tensor([0.0, 0.0, 25.0])
+        sigma = x.new_tensor([8.0, 9.0, 8.6])
+
+        return mu + sigma * x
+
+
+class NoisyLorenz63(Lorenz63):
+    r"""Noisy Lorenz 1963 dynamics"""
+
+    def transition(self, x: Tensor) -> Tensor:
+        x = super().transition(x)
+        z = 1e-2 * self.dt ** 0.5 * self.f(x) * torch.randn_like(x)
+
+        return x + z
 
 
 class Lorenz96(DiscreteODE):

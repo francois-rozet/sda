@@ -212,33 +212,9 @@ class CompositeMCScoreNet(nn.Module):
 class VPSDE(nn.Module):
     r"""Creates a noise scheduler for the variance preserving (VP) SDE.
 
-    The goal of denoising score matching (DSM) is to train a score estimator
-    :math:`s_\phi(x, t)` at approximating the rescaled score
-
-    .. math:: s(x(t), t) = \sigma(t) \nabla_{x(t)} \log p(x(t))
-
-    by minimizing the rescaled score matching objective
-
-    .. math:: \arg \min_\phi \mathbb{E}_{p(x) p(t) p(x(t) | x)} \Big[ \big\|
-        s_\phi(x(t), t) - \sigma(t) \nabla_{x(t)} \log p(x(t) | x) \big\|_2^2 \Big]
-
-    where :math:`p(x)` is an unknown distribution and :math:`p(x(t) | x)` is a
-    perturbation kernel of the form
-
-    .. math:: p(x(t) | x) = \mathcal{N}(x(t) | \mu(t) x, \sigma(t)^2 I) .
-
-    In the case of the variance preserving (VP) SDE,
-
     .. math::
         \mu(t) & = \alpha(t) \\
         \sigma(t)^2 & = 1 - \alpha(t)^2 + \epsilon^2
-
-    with :math:`\alpha(t) = \exp(\log(\epsilon) t^2)`. After training, we can sample
-    from :math:`p(x(0))` by first sampling :math:`x(1) \sim p(x(1)) \approx
-    \mathbb{N}(0, 1)` and then denoising it iteratively with
-
-    .. math:: x(t - \Delta t) \approx \frac{\mu(t - \Delta t)}{\mu(t)} x(t) +
-        (\frac{\mu(t - \Delta t)}{\mu(t)} \sigma(t) - \sigma(t - \Delta)) s(x(t), t)
 
     Arguments:
         score: A score estimator :math:`s_\phi(x, t)`.
@@ -315,6 +291,8 @@ class VPSDE(nn.Module):
         return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor) -> Tensor:
+        r"""Returns the rescaled denoising score matching loss."""
+
         t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
         x, target = self.forward(x, t, train=True)
 

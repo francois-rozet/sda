@@ -219,10 +219,17 @@ class VPSDE(nn.Module):
     Arguments:
         score: A score estimator :math:`s_\phi(x, t)`.
         shape: The event shape.
+        alpha: The choice of :math:`\alpha(t)`.
         epsilon: A numerical stability term.
     """
 
-    def __init__(self, score: nn.Module, shape: Size, epsilon: float = 1e-3):
+    def __init__(
+        self,
+        score: nn.Module,
+        shape: Size,
+        alpha: str = 'cos',
+        epsilon: float = 1e-3,
+    ):
         super().__init__()
 
         self.score = score
@@ -230,10 +237,16 @@ class VPSDE(nn.Module):
         self.dims = tuple(range(-len(shape), 0))
         self.epsilon = epsilon
 
-        self.register_buffer('device', torch.empty(()))
+        if alpha == 'lin':
+            self.alpha = lambda t: 1 - (1 - epsilon) * t
+        elif alpha == 'cos':
+            self.alpha = lambda t: torch.cos(math.acos(math.sqrt(epsilon)) * t) ** 2
+        elif alpha == 'exp':
+            self.alpha = lambda t: torch.exp(math.log(epsilon) * t**2)
+        else:
+            raise ValueError()
 
-    def alpha(self, t: Tensor) -> Tensor:
-        return torch.exp(math.log(self.epsilon) * t**2)
+        self.register_buffer('device', torch.empty(()))
 
     def mu(self, t: Tensor) -> Tensor:
         return self.alpha(t)
@@ -273,7 +286,7 @@ class VPSDE(nn.Module):
         x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
 
-        time = torch.linspace(1, 0, steps + 1).square().to(x)
+        time = torch.linspace(1, 0, steps + 1).to(x)
 
         with torch.no_grad():
             for t, dt in zip(time, time.diff()):

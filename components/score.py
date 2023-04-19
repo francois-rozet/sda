@@ -150,7 +150,7 @@ class CompositeMCScoreNet(nn.Module):
         else:
             build = ScoreNet
 
-        self.kernel_j = build(features * (order + 1), **kwargs)
+        self.kernel_t = build(features * (order + 1), **kwargs)
         self.kernel_m = build(features * order, **kwargs)
 
     def forward(
@@ -158,9 +158,9 @@ class CompositeMCScoreNet(nn.Module):
         x: Tensor,  # (B, L, C, H, W)
         t: Tensor,  # ()
     ) -> Tensor:
-        x_j = self.unfold(x, self.order + 1)
-        s_j = self.kernel_j(x_j, t)
-        s_j = self.fold(s_j, self.order + 1)
+        x_t = self.unfold(x, self.order + 1)
+        s_t = self.kernel_t(x_t, t)
+        s_t = self.fold(s_t, self.order + 1)
 
         x_m = x[:, 1:-1]
         x_m = self.unfold(x_m, self.order)
@@ -168,7 +168,7 @@ class CompositeMCScoreNet(nn.Module):
         s_m = self.fold(s_m, self.order)
         s_m = self.pad(s_m, (1, 1))
 
-        return s_j - s_m
+        return s_t - s_m
 
     @staticmethod
     @torch.jit.script_if_tracing

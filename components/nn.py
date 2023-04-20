@@ -29,6 +29,7 @@ class UNet(nn.Module):
         hidden_channels: The number of hidden channels.
         hidden_blocks: The number of hidden blocks at each depth.
         kernel_size: The size of the convolution kernels.
+        stride: The stride of the downsampling convolutions.
         activation: The activation function constructor.
         spatial: The number of spatial dimensions. Can be either 1, 2 or 3.
         kwargs: Keyword arguments passed to :class:`nn.Conv2d`.
@@ -41,7 +42,8 @@ class UNet(nn.Module):
         context: int,
         hidden_channels: Sequence[int] = (32, 64, 128),
         hidden_blocks: Sequence[int] = (2, 3, 5),
-        kernel_size: int = 3,
+        kernel_size: Union[int, Sequence[int]] = 3,
+        stride: Union[int, Sequence[int]] = 2,
         activation: Callable[[], nn.Module] = nn.ReLU,
         spatial: int = 2,
         **kwargs,
@@ -59,25 +61,24 @@ class UNet(nn.Module):
             3: nn.Conv3d,
         }.get(spatial)
 
+        if type(kernel_size) is int:
+            kernel_size = [kernel_size] * spatial
+
+        if type(stride) is int:
+            stride = [stride] * spatial
+
+        kwargs.update(
+            kernel_size=kernel_size,
+            padding=[k // 2 for k in kernel_size],
+        )
+
         block = lambda channels: nn.ModuleDict({
             'project': nn.Linear(context, channels),
             'residue': nn.Sequential(
                 LayerNorm(-(spatial + 1)),
-                convolution(
-                    channels,
-                    channels,
-                    kernel_size=kernel_size,
-                    padding=kernel_size // 2,
-                    **kwargs,
-                ),
+                convolution(channels, channels, **kwargs),
                 activation(),
-                convolution(
-                    channels,
-                    channels,
-                    kernel_size=kernel_size,
-                    padding=kernel_size // 2,
-                    **kwargs,
-                ),
+                convolution(channels, channels, **kwargs),
             ),
         })
 
@@ -91,9 +92,7 @@ class UNet(nn.Module):
                     convolution(
                         hidden_channels[i - 1],
                         hidden_channels[i],
-                        kernel_size=kernel_size,
-                        padding=kernel_size // 2,
-                        stride=2,
+                        stride=stride,
                         **kwargs,
                     )
                 )
@@ -101,36 +100,17 @@ class UNet(nn.Module):
                 tails.append(
                     nn.Sequential(
                         LayerNorm(-(spatial + 1)),
-                        nn.Upsample(scale_factor=(2,) * spatial, mode='nearest'),
+                        nn.Upsample(scale_factor=tuple(stride), mode='nearest'),
                         convolution(
                             hidden_channels[i],
                             hidden_channels[i - 1],
-                            kernel_size=kernel_size,
-                            padding=kernel_size // 2,
                             **kwargs,
                         ),
                     )
                 )
             else:
-                heads.append(
-                    convolution(
-                        in_channels,
-                        hidden_channels[i],
-                        kernel_size=kernel_size,
-                        padding=kernel_size // 2,
-                        **kwargs,
-                    )
-                )
-
-                tails.append(
-                    convolution(
-                        hidden_channels[i],
-                        out_channels,
-                        kernel_size=kernel_size,
-                        padding=kernel_size // 2,
-                        **kwargs,
-                    )
-                )
+                heads.append(convolution(in_channels, hidden_channels[i], **kwargs))
+                tails.append(convolution(hidden_channels[i], out_channels, **kwargs))
 
             descent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))
             ascent.append(nn.ModuleList(block(hidden_channels[i]) for _ in range(blocks)))

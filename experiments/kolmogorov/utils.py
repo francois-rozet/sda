@@ -22,16 +22,16 @@ PATH.mkdir(parents=True, exist_ok=True)
 
 
 def make_score(
-    channels: int,
-    embedding: int = 128,
-    hidden_channels: Sequence[int] = (64, 96, 128, 192),
-    hidden_blocks: Sequence[int] = (3, 3, 3, 3),
+    window: int = 3,
+    embedding: int = 64,
+    hidden_channels: Sequence[int] = (64, 128, 256),
+    hidden_blocks: Sequence[int] = (3, 3, 3),
     kernel_size: int = 3,
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
     return ScoreUNet(
-        channels=channels,
+        channels=window * 2,
         embedding=embedding,
         hidden_channels=hidden_channels,
         hidden_blocks=hidden_blocks,

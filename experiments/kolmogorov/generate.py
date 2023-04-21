@@ -13,6 +13,12 @@ from components.utils import *
 from utils import *
 
 
+@job(cpus=1, time='00:01:00')
+def mkdir():
+    (PATH / 'data').mkdir(parents=True, exist_ok=True)
+
+
+@after(mkdir)
 @ensure(lambda i: (PATH / f'data/x_{i:06d}.npy').exists())
 @job(array=1024, cpus=1, ram='1GB', time='00:05:00')
 def simulate(i: int):

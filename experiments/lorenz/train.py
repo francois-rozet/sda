@@ -30,26 +30,21 @@ CONFIG = {
 }
 
 
-@job(array=4, cpus=2, ram='8GB', time='06:00:00')
+@job(array=3, cpus=2, ram='8GB', time='06:00:00')
 def train(i: int):
-    if i % 2 == 0:
-        joint, group = False, 'marginal'
-    else:
-        joint, group = True, 'joint'
-
-    run = wandb.init(project='ssm-lorenz', group=group, config=CONFIG)
+    run = wandb.init(project='ssm-lorenz', config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
     save_config(CONFIG, runpath)
 
     # Network
-    score = make_score(features=6 if joint else 3, **CONFIG)
-    sde = VPSDE(score, shape=(6 if joint else 3,))
+    score = make_score(window=5, **CONFIG)
+    sde = VPSDE(score, shape=(15,))
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5', window=2 if joint else 1)
-    validset = load_data(PATH / 'data/valid.h5', window=2 if joint else 1)
+    trainset = load_data(PATH / 'data/train.h5', window=5)
+    validset = load_data(PATH / 'data/valid.h5', window=5)
 
     # Training
     generator = loop(
@@ -72,6 +67,17 @@ def train(i: int):
         runpath / f'state.pth',
     )
 
+    # Evaluation
+    chain = Lorenz63(dt=0.025)
+
+    x = sde.sample((4096,), steps=64)
+    x = x.unflatten(-1, (-1, 3))
+    x = chain.postprocess(x)
+    y = chain.transition(x[:, :-1])
+
+    mse = (y - x[:, 1:]).square().mean().item()
+
+    run.log({'mse': mse})
     run.finish()
 
 

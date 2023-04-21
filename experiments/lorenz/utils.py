@@ -19,7 +19,7 @@ PATH.mkdir(parents=True, exist_ok=True)
 
 
 def make_score(
-    features: int,
+    window: int,
     embedding: int = 32,
     width: int = 128,
     depth: int = 5,
@@ -27,7 +27,7 @@ def make_score(
     **absorb,
 ) -> nn.Module:
     return ScoreNet(
-        features=features,
+        features=window * 3,
         embedding=embedding,
         hidden_features=[width] * depth,
         activation=ACTIVATIONS[activation],

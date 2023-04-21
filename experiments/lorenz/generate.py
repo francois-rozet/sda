@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-from dawgz import job, schedule
+from dawgz import job, after, schedule
 from typing import *
 
 from components.mcs import *
@@ -9,6 +9,12 @@ from components.utils import *
 from utils import *
 
 
+@job(cpus=1, time='00:01:00')
+def mkdir():
+    (PATH / 'data').mkdir(parents=True, exist_ok=True)
+
+
+@after(mkdir)
 @job(cpus=1, ram='1GB', time='00:05:00')
 def simulate():
     chain = NoisyLorenz63(dt=0.025)

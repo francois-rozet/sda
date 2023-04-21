@@ -1,27 +1,19 @@
 #!/usr/bin/env python
 
-import json
-import matplotlib.pyplot as plt
 import numpy as np
-import os
-import random
-import seaborn
 import wandb
 
 from dawgz import job, schedule
-from pathlib import Path
 from typing import *
 
 from components.mcs import *
 from components.score import *
 from components.utils import *
 
+from utils import *
 
-SCRATCH = os.environ.get('SCRATCH', '.')
-PATH = Path(SCRATCH) / 'ssm/kolmogorov'
-PATH.mkdir(parents=True, exist_ok=True)
 
-CONFIG = {
+CONFIGS = {
     # Architecture
     'embedding': [64, 128, 256],
     'hidden_channels': [(64, 96, 128, 192)],
@@ -38,47 +30,23 @@ CONFIG = {
 }
 
 
-def build(channels: int, **config) -> nn.Module:
-    activation = {
-        'ReLU': nn.ReLU,
-        'ELU': nn.ELU,
-        'GELU': nn.GELU,
-        'SiLU': nn.SiLU,
-    }.get(config['activation'])
-
-    return ScoreUNet(
-        channels=channels,
-        embedding=config['embedding'],
-        hidden_channels=config['hidden_channels'],
-        hidden_blocks=config['hidden_blocks'],
-        kernel_size=config['kernel_size'],
-        activation=activation,
-        spatial=2,
-        padding_mode='circular',
-    )
-
-
 @job(array=64, cpus=2, gpus=1, ram='16GB', time='06:00:00')
 def train(i: int):
-    config = {
-        key: random.choice(values)
-        for key, values in CONFIG.items()
-    }
+    config = random_config(CONFIGS)
 
     run = wandb.init(project='ssm-kolmogorov-sweep', config=config)
     runpath = PATH / f'sweep/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
-    with open(runpath / 'config.json', 'w') as f:
-        json.dump(config, f)
+    save_config(config, runpath)
 
     # Network
-    score = build(channels=2, **config)
-    sde = VPSDE(score, shape=(2, 64, 64)).cuda()
+    score = make_score(channels=4, **config)
+    sde = VPSDE(score, shape=(4, 64, 64)).cuda()
 
     # Data
-    trainset = read(PATH / 'data/train.h5', window=1)
-    validset = read(PATH / 'data/valid.h5', window=1)
+    trainset = load_data(PATH / 'data/train.h5', window=2)
+    validset = load_data(PATH / 'data/valid.h5', window=2)
 
     # Training
     generator = loop(
@@ -103,18 +71,11 @@ def train(i: int):
     )
 
     # Evaluation
-    x = sde.sample((4,), steps=64).cpu()
+    x = sde.sample((2,), steps=64).cpu()
+    w = w.unflatten(1, (-1, 2))
     w = KolmogorovFlow.vorticity(x)
 
-    fig, axs = plt.subplots(2, 2, figsize=(6.4, 6.4))
-
-    for i, ax in enumerate(axs.flat):
-        ax.imshow(w[i], cmap=seaborn.cm.icefire)
-        ax.label_outer()
-
-    fig.tight_layout()
-
-    run.log({'samples': wandb.Image(fig)})
+    run.log({'samples': wandb.Image(draw(w))})
     run.finish()
 
 

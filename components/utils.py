@@ -1,7 +1,10 @@
 r"""Helpers"""
 
 import h5py
+import json
 import math
+import numpy as np
+import random
 import torch
 
 from pathlib import Path
@@ -12,7 +15,38 @@ from typing import *
 from .score import *
 
 
-def read(file: Path, window: int = None) -> Tensor:
+ACTIVATIONS = {
+    'ReLU': torch.nn.ReLU,
+    'ELU': torch.nn.ELU,
+    'GELU': torch.nn.GELU,
+    'SELU': torch.nn.SELU,
+    'SiLU': torch.nn.SiLU,
+}
+
+
+def random_config(configs: Dict[str, Sequence[Any]]) -> Dict[str, Any]:
+    return {
+        key: random.choice(values)
+        for key, values in configs.items()
+    }
+
+
+def save_config(config: Dict[str, Any], path: Path) -> None:
+    with open(path / 'config.json', mode='x') as f:
+        json.dump(config, f)
+
+
+def load_config(path: Path) -> Dict[str, Any]:
+    with open(path / 'config.json', mode='r') as f:
+        return json.load(f)
+
+
+def save_data(x: Tensor, file: Path) -> None:
+    with h5py.File(file, mode='w') as f:
+        f.create_dataset('x', data=x, dtype=np.float32)
+
+
+def load_data(file: Path, window: int = None) -> Tensor:
     with h5py.File(file, mode='r') as f:
         data = f['x'][:]
 
@@ -68,7 +102,7 @@ def loop(
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr)
 
     # Loop
-    for epoch in trange(epochs, ncols=88):
+    for epoch in (bar := trange(epochs, ncols=88)):
         losses_train = []
         losses_valid = []
 
@@ -97,11 +131,13 @@ def loop(
                 losses_valid.append(sde.loss(x))
 
         ## Stats
-        yield (
-            torch.stack(losses_train).mean().item(),
-            torch.stack(losses_valid).mean().item(),
-            optimizer.param_groups[0]['lr'],
-        )
+        loss_train = torch.stack(losses_train).mean().item()
+        loss_valid = torch.stack(losses_valid).mean().item()
+        lr = optimizer.param_groups[0]['lr']
+
+        yield loss_train, loss_valid, lr
+
+        bar.set_postfix(lt=loss_train, lv=loss_valid, lr=lr)
 
         ## Step
         scheduler.step()

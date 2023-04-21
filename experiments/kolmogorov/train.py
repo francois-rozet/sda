@@ -1,26 +1,15 @@
 #!/usr/bin/env python
 
-import json
-import matplotlib.pyplot as plt
-import numpy as np
-import os
-import random
-import seaborn
 import wandb
 
 from dawgz import job, schedule
-from pathlib import Path
 from typing import *
 
 from components.score import *
 from components.utils import *
 
-from search import build
+from utils import *
 
-
-SCRATCH = os.environ.get('SCRATCH', '.')
-PATH = Path(SCRATCH) / 'ssm/kolmogorov'
-PATH.mkdir(parents=True, exist_ok=True)
 
 CONFIG = {
     # Architecture
@@ -50,16 +39,15 @@ def train(i: int):
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
-    with open(runpath / 'config.json', 'w') as f:
-        json.dump(CONFIG, f)
+    save_config(CONFIG, runpath)
 
     # Network
-    score = build(channels=4 if joint else 2, **CONFIG)
+    score = make_score(channels=4 if joint else 2, **CONFIG)
     sde = VPSDE(score, shape=(4 if joint else 2, 64, 64)).cuda()
 
     # Data
-    trainset = read(PATH / 'data/train.h5', window=2 if joint else 1)
-    validset = read(PATH / 'data/valid.h5', window=2 if joint else 1)
+    trainset = load_data(PATH / 'data/train.h5', window=2 if joint else 1)
+    validset = load_data(PATH / 'data/valid.h5', window=2 if joint else 1)
 
     # Training
     generator = loop(

@@ -21,6 +21,29 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
+class SpecialScoreUNet(ScoreUNet):
+    r"""Creates a score U-Net with a forcing channel."""
+
+    def __init__(
+        self,
+        channels: int,
+        size: int = 64,
+        **kwargs,
+    ):
+        super().__init__(channels + 1, **kwargs)
+
+        domain = 2 * torch.pi / size * (torch.arange(size) + 1 / 2)
+        forcing = torch.sin(4 * domain).expand(1, size, size).clone()
+
+        self.register_buffer('forcing', forcing)
+
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        x, f = broadcast(x, self.forcing, ignore=3)
+        x = torch.cat((x, f), dim=-3)
+
+        return super().forward(x, t)[..., :-1, :, :]
+
+
 def make_score(
     window: int = 3,
     embedding: int = 64,
@@ -30,7 +53,7 @@ def make_score(
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
-    return ScoreUNet(
+    return SpecialScoreUNet(
         channels=window * 2,
         embedding=embedding,
         hidden_channels=hidden_channels,

@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn as nn
 
-from torch import Size, Tensor, BoolTensor
+from torch import Size, Tensor
 from typing import *
 from zuko.utils import broadcast
 
@@ -338,64 +338,54 @@ class SubSubVPSDE(VPSDE):
         return 1 - self.alpha(t) + self.epsilon
 
 
-class ImputationScore(nn.Module):
-    r"""Creates a score module for imputation problems."""
+class GeneralGaussianScore(nn.Module):
+    r"""Creates a score module for general Gaussian inverse problems.
+
+    .. math:: p(y | x) = N(y | A(x), Σ)
+
+    References:
+        | Diffusion Posterior Sampling for General Noisy Inverse Problems (Chung et al., 2022)
+        | https://arxiv.org/abs/2209.14687
+    """
 
     def __init__(
         self,
         y: Tensor,
-        mask: BoolTensor,
+        A: Callable[[Tensor], Tensor],
+        std: Union[float, Tensor],
         sde: VPSDE,
+        detach: bool = False,
     ):
         super().__init__()
 
         self.register_buffer('y', y)
-        self.register_buffer('mask', mask)
+        self.register_buffer('std', torch.as_tensor(std))
 
-        self.score = sde.score
-        self.mu = sde.mu
-        self.sigma = sde.sigma
-
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        return torch.where(
-            self.mask,
-            (self.mu(t) * self.y - x) / self.sigma(t),
-            self.score(x, t),
-        )
-
-
-class LinearGaussianScore(nn.Module):
-    r"""Creates a score module for linear Gaussian inverse problems."""
-
-    def __init__(
-        self,
-        y: Tensor,
-        f: Callable[[Tensor], Tensor],  # A @ x
-        diag: Union[float, Tensor],  # diag(A @ A^T)
-        noise: Union[float, Tensor],
-        sde: VPSDE,
-    ):
-        super().__init__()
-
-        self.register_buffer('y', y)
-        self.register_buffer('diag', torch.as_tensor(diag))
-        self.register_buffer('noise', torch.as_tensor(noise))
-
-        self.f = f
-        self.score = sde.score
-        self.mu = sde.mu
-        self.sigma = sde.sigma
+        self.A = A
+        self.sde = sde
+        self.detach = detach
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        mu, sigma = self.sde.mu(t), self.sde.sigma(t)
+
+        if sigma / mu > 2:
+            return self.sde.score(x, t)
+        elif self.detach:
+            s = self.sde.score(x, t)
+
         with torch.enable_grad():
             x = x.detach().requires_grad_(True)
 
-            err = self.f(x) - self.mu(t) * self.y
-            var = (self.mu(t) * self.noise) ** 2 + self.sigma(t) ** 2 * self.diag
-            var = var / self.sigma(t)
+            if not self.detach:
+                s = self.sde.score(x, t)
+
+            x_ = (x + sigma * s) / mu
+
+            err = self.y - self.A(x_)
+            var = self.std ** 2 + torch.exp(-3 * mu / sigma)
 
             log_p = -(err ** 2 / var).sum() / 2
 
-        score, = torch.autograd.grad(log_p, x)
+        s_inv, = torch.autograd.grad(log_p, x)
 
-        return self.score(x, t) + score
+        return s + sigma * s_inv

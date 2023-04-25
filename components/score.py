@@ -214,35 +214,35 @@ class VPSDE(nn.Module):
 
     .. math::
         \mu(t) & = \alpha(t) \\
-        \sigma(t)^2 & = 1 - \alpha(t)^2 + \epsilon^2
+        \sigma(t)^2 & = 1 - \alpha(t)^2 + \eta^2
 
     Arguments:
-        score: A score estimator :math:`s_\phi(x, t)`.
+        eps: A noise estimator :math:`\epsilon_\phi(x, t)`.
         shape: The event shape.
         alpha: The choice of :math:`\alpha(t)`.
-        epsilon: A numerical stability term.
+        eta: A numerical stability term.
     """
 
     def __init__(
         self,
-        score: nn.Module,
+        eps: nn.Module,
         shape: Size,
         alpha: str = 'cos',
-        epsilon: float = 1e-3,
+        eta: float = 1e-3,
     ):
         super().__init__()
 
-        self.score = score
+        self.eps = eps
         self.shape = shape
         self.dims = tuple(range(-len(shape), 0))
-        self.epsilon = epsilon
+        self.eta = eta
 
         if alpha == 'lin':
-            self.alpha = lambda t: 1 - (1 - epsilon) * t
+            self.alpha = lambda t: 1 - (1 - eta) * t
         elif alpha == 'cos':
-            self.alpha = lambda t: torch.cos(math.acos(math.sqrt(epsilon)) * t) ** 2
+            self.alpha = lambda t: torch.cos(math.acos(math.sqrt(eta)) * t) ** 2
         elif alpha == 'exp':
-            self.alpha = lambda t: torch.exp(math.log(epsilon) * t**2)
+            self.alpha = lambda t: torch.exp(math.log(eta) * t**2)
         else:
             raise ValueError()
 
@@ -252,18 +252,18 @@ class VPSDE(nn.Module):
         return self.alpha(t)
 
     def sigma(self, t: Tensor) -> Tensor:
-        return (1 - self.alpha(t) ** 2 + self.epsilon ** 2).sqrt()
+        return (1 - self.alpha(t) ** 2 + self.eta ** 2).sqrt()
 
     def forward(self, x: Tensor, t: Tensor, train: bool = False) -> Tensor:
         r"""Samples from the perturbation kernel :math:`p(x(t) | x)`."""
 
         t = t.reshape(t.shape + (1,) * len(self.shape))
 
-        z = torch.randn_like(x)
-        x = self.mu(t) * x + self.sigma(t) * z
+        eps = torch.randn_like(x)
+        x = self.mu(t) * x + self.sigma(t) * eps
 
         if train:
-            return x, -z
+            return x, eps
         else:
             return x
 
@@ -272,7 +272,7 @@ class VPSDE(nn.Module):
         shape: Size = (),
         steps: int = 64,
         corrections: int = 0,
-        amplitude: float = 1.0,
+        tau: float = 1.0,
     ) -> Tensor:
         r"""Samples from :math:`p(x(0))`.
 
@@ -280,38 +280,38 @@ class VPSDE(nn.Module):
             shape: The batch shape.
             steps: The number of discrete time steps.
             corrections: The number of Langevin corrections per time steps.
-            amplitude: The amplitude of Langevin steps.
+            tau: The amplitude of Langevin steps.
         """
 
         x = torch.randn(shape + self.shape).to(self.device)
         x = x.reshape(-1, *self.shape)
 
-        time = torch.linspace(1, 0, steps + 1).to(x)
+        time = torch.linspace(1, 0, steps + 1).to(self.device)
+        dt = 1 / steps
 
         with torch.no_grad():
-            for t, dt in zip(time, time.diff()):
+            for t in time[:-1]:
                 # Predictor
-                r = self.mu(t + dt) / self.mu(t)
-                x = r * x + (r * self.sigma(t) - self.sigma(t + dt)) * self.score(x, t)
+                r = self.mu(t - dt) / self.mu(t)
+                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t)
 
                 # Corrector
                 for _ in range(corrections):
-                    z = torch.randn_like(x)
-                    s = self.score(x, t + dt)
-                    eps = amplitude / s.square().mean(dim=self.dims, keepdim=True)
+                    eps = torch.randn_like(x)
+                    s = -self.eps(x, t - dt) / self.sigma(t - dt)
+                    delta = tau / s.square().mean(dim=self.dims, keepdim=True)
 
-                    dx = eps * s + (2 * eps).sqrt() * z
-                    x = x + self.sigma(t + dt) * dx
+                    x = x + delta * s + torch.sqrt(2 * delta) * eps
 
         return x.reshape(shape + self.shape)
 
     def loss(self, x: Tensor) -> Tensor:
-        r"""Returns the rescaled denoising score matching loss."""
+        r"""Returns the denoising loss."""
 
         t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
-        x, target = self.forward(x, t, train=True)
+        x, eps = self.forward(x, t, train=True)
 
-        return (self.score(x, t) - target).square().mean()
+        return (self.eps(x, t) - eps).square().mean()
 
 
 class SubVPSDE(VPSDE):
@@ -319,11 +319,11 @@ class SubVPSDE(VPSDE):
 
     .. math::
         \mu(t) & = \alpha(t) \\
-        \sigma(t)^2 & = (1 - \alpha(t)^2 + \epsilon)^2
+        \sigma(t)^2 & = (1 - \alpha(t)^2 + \eta)^2
     """
 
     def sigma(self, t: Tensor) -> Tensor:
-        return 1 - self.alpha(t) ** 2 + self.epsilon
+        return 1 - self.alpha(t) ** 2 + self.eta
 
 
 class SubSubVPSDE(VPSDE):
@@ -331,11 +331,11 @@ class SubSubVPSDE(VPSDE):
 
     .. math::
         \mu(t) & = \alpha(t) \\
-        \sigma(t)^2 & = (1 - \alpha(t) + \epsilon)^2
+        \sigma(t)^2 & = (1 - \alpha(t) + \eta)^2
     """
 
     def sigma(self, t: Tensor) -> Tensor:
-        return 1 - self.alpha(t) + self.epsilon
+        return 1 - self.alpha(t) + self.eta
 
 
 class GeneralGaussianScore(nn.Module):
@@ -346,6 +346,9 @@ class GeneralGaussianScore(nn.Module):
     References:
         | Diffusion Posterior Sampling for General Noisy Inverse Problems (Chung et al., 2022)
         | https://arxiv.org/abs/2209.14687
+
+    Note:
+        This module returns :math:`-\sigma(t) s(x(t), t | y)`.
     """
 
     def __init__(
@@ -354,6 +357,7 @@ class GeneralGaussianScore(nn.Module):
         A: Callable[[Tensor], Tensor],
         std: Union[float, Tensor],
         sde: VPSDE,
+        gamma: float = 1e-2,
         detach: bool = False,
     ):
         super().__init__()
@@ -363,29 +367,30 @@ class GeneralGaussianScore(nn.Module):
 
         self.A = A
         self.sde = sde
+        self.gamma = gamma
         self.detach = detach
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         mu, sigma = self.sde.mu(t), self.sde.sigma(t)
 
         if sigma / mu > 2:
-            return self.sde.score(x, t)
+            return self.sde.eps(x, t)
         elif self.detach:
-            s = self.sde.score(x, t)
+            eps = self.sde.eps(x, t)
 
         with torch.enable_grad():
             x = x.detach().requires_grad_(True)
 
             if not self.detach:
-                s = self.sde.score(x, t)
+                eps = self.sde.eps(x, t)
 
-            x_ = (x + sigma * s) / mu
+            x_ = (x - sigma * eps) / mu
 
             err = self.y - self.A(x_)
-            var = self.std ** 2 + torch.exp(-3 * mu / sigma)
+            var = self.std ** 2 + self.gamma * (sigma / mu) ** 2
 
             log_p = -(err ** 2 / var).sum() / 2
 
-        s_inv, = torch.autograd.grad(log_p, x)
+        s, = torch.autograd.grad(log_p, x)
 
-        return s + sigma * s_inv
+        return eps - sigma * s

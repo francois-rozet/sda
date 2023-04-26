@@ -5,7 +5,7 @@ import seaborn
 
 from numpy.typing import ArrayLike
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw, ImageOps
 from typing import *
 
 from components.score import *
@@ -114,6 +114,43 @@ def draw(w: ArrayLike, pad: int = 4, zoom: int = 1, **kwargs) -> Image.Image:
 
     if zoom > 1:
         return img.resize((img.width * zoom, img.height * zoom), resample=0)
+    else:
+        return img
+
+
+def sandwich(
+    w: ArrayLike,
+    offset: int = 5,
+    border: int = 1,
+    mirror: bool = False,
+    **kwargs,
+):
+    w = vorticity2rgb(w, **kwargs)
+    n, width, height, _ = w.shape
+
+    if mirror:
+        w = w[:, :, ::-1]
+
+    img = Image.new(
+        'RGB',
+        size=(
+            width + (n - 1) * offset,
+            height + (n - 1) * offset,
+        ),
+        color=(255, 255, 255),
+    )
+
+    draw = ImageDraw.Draw(img)
+
+    for i in range(n):
+        draw.rectangle(
+            (i * offset - border, i * offset - border, img.width, img.height),
+            (255, 255, 255),
+        )
+        img.paste(Image.fromarray(w[i]), (i * offset, i * offset))
+
+    if mirror:
+        return ImageOps.mirror(img)
     else:
         return img
 

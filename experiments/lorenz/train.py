@@ -16,8 +16,8 @@ from utils import *
 GLOBAL_CONFIG = {
     # Architecture
     'embedding': 32,
-    'hidden_channels': (32, 64),
-    'hidden_blocks': (2, 1),
+    'hidden_channels': (64,),
+    'hidden_blocks': (3,),
     'activation': 'SiLU',
     # Training
     'epochs': 1024,
@@ -31,8 +31,9 @@ GLOBAL_CONFIG = {
 
 LOCAL_CONFIG = {
     # Architecture
+    'window': 5,
     'embedding': 32,
-    'width': 128,
+    'width': 256,
     'depth': 5,
     'activation': 'SiLU',
     # Training
@@ -46,9 +47,9 @@ LOCAL_CONFIG = {
 }
 
 
-@job(array=3, cpus=2, ram='8GB', time='06:00:00')
+@job(array=3, cpus=2, ram='8GB', time='12:00:00')
 def train_global(i: int):
-    run = wandb.init(project='ssm-lorenz-global', config=GLOBAL_CONFIG)
+    run = wandb.init(project='ssm-lorenz', group='global', config=GLOBAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
@@ -56,11 +57,11 @@ def train_global(i: int):
 
     # Network
     score = make_global_score(**GLOBAL_CONFIG)
-    sde = VPSDE(score, shape=(3, 16))
+    sde = VPSDE(score, shape=(3, 32))
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5').unfold(1, 16, 1).flatten(0, 1)
-    validset = load_data(PATH / 'data/valid.h5').unfold(1, 16, 1).flatten(0, 1)
+    trainset = load_data(PATH / 'data/train.h5').unfold(1, 32, 1).flatten(0, 1)
+    validset = load_data(PATH / 'data/valid.h5').unfold(1, 32, 1).flatten(0, 1)
 
     # Training
     generator = loop(
@@ -84,34 +85,34 @@ def train_global(i: int):
     )
 
     # Evaluation
-    chain = Lorenz63(dt=0.025)
+    chain = NoisyLorenz63(dt=0.025)
 
     x = sde.sample((1024,), steps=64)
     x = x.transpose(-1, -2)
     x = chain.postprocess(x)
-    y = chain.transition(x[:, :-1])
 
-    mse = (y - x[:, 1:]).square().mean().item()
+    log_p = chain.log_prob(x[:, :-1], x[:, 1:]).mean()
 
-    run.log({'mse': mse})
+    run.log({'log_p': log_p})
     run.finish()
 
 
-@job(array=3, cpus=2, ram='8GB', time='06:00:00')
+@job(array=3, cpus=2, ram='8GB', time='12:00:00')
 def train_local(i: int):
-    run = wandb.init(project='ssm-lorenz-local', config=LOCAL_CONFIG)
+    run = wandb.init(project='ssm-lorenz', group='local', config=LOCAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
     save_config(LOCAL_CONFIG, runpath)
 
     # Network
-    score = make_local_score(window=5, **LOCAL_CONFIG)
-    sde = VPSDE(score, shape=(15,))
+    window = LOCAL_CONFIG['window']
+    score = make_local_score(**LOCAL_CONFIG)
+    sde = VPSDE(score.kernel, shape=(window * 3,))
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5', window=5)
-    validset = load_data(PATH / 'data/valid.h5', window=5)
+    trainset = load_data(PATH / 'data/train.h5', window=window)
+    validset = load_data(PATH / 'data/valid.h5', window=window)
 
     # Training
     generator = loop(
@@ -135,16 +136,15 @@ def train_local(i: int):
     )
 
     # Evaluation
-    chain = Lorenz63(dt=0.025)
+    chain = NoisyLorenz63(dt=0.025)
 
     x = sde.sample((4096,), steps=64)
     x = x.unflatten(-1, (-1, 3))
     x = chain.postprocess(x)
-    y = chain.transition(x[:, :-1])
 
-    mse = (y - x[:, 1:]).square().mean().item()
+    log_p = chain.log_prob(x[:, :-1], x[:, 1:]).mean()
 
-    run.log({'mse': mse})
+    run.log({'log_p': log_p})
     run.finish()
 
 

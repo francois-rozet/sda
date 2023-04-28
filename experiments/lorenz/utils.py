@@ -20,8 +20,8 @@ PATH.mkdir(parents=True, exist_ok=True)
 
 def make_global_score(
     embedding: int = 32,
-    hidden_channels: Sequence[int] = (32, 64),
-    hidden_blocks: Sequence[int] = (2, 1),
+    hidden_channels: Sequence[int] = (64,),
+    hidden_blocks: Sequence[int] = (3,),
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
@@ -43,8 +43,9 @@ def make_local_score(
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
-    return ScoreNet(
-        features=window * 3,
+    return MCScoreNet(
+        features=3,
+        order=window // 2,
         embedding=embedding,
         hidden_features=[width] * depth,
         activation=ACTIVATIONS[activation],

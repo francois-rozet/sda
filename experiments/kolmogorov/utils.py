@@ -53,7 +53,8 @@ def make_score(
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
-    return SpecialScoreUNet(
+    score = MCScoreNet(2, order=window // 2)
+    score.kernel = SpecialScoreUNet(
         channels=window * 2,
         embedding=embedding,
         hidden_channels=hidden_channels,
@@ -63,6 +64,8 @@ def make_score(
         spatial=2,
         padding_mode='circular',
     )
+
+    return score
 
 
 def load_score(file: Path, device: str = 'cpu', **kwargs) -> nn.Module:

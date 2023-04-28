@@ -15,7 +15,7 @@ except:
 
 from functools import partial
 from torch import Tensor, Size
-from torch.distributions import MultivariateNormal
+from torch.distributions import Normal, MultivariateNormal
 from typing import *
 
 
@@ -175,11 +175,14 @@ class Lorenz63(DiscreteODE):
 class NoisyLorenz63(Lorenz63):
     r"""Noisy Lorenz 1963 dynamics"""
 
-    def transition(self, x: Tensor) -> Tensor:
-        x = super().transition(x)
-        z = 1e-2 * self.dt ** 0.5 * self.f(x) * torch.randn_like(x)
+    def moments(self, x: Tensor) -> Tuple[Tensor, Tensor]:
+        return super().transition(x), self.dt ** 0.5
 
-        return x + z
+    def transition(self, x: Tensor) -> Tensor:
+        return Normal(*self.moments(x)).sample()
+
+    def log_prob(self, x1: Tensor, x2: Tensor) -> Tensor:
+        return Normal(*self.moments(x1)).log_prob(x2).sum(dim=-1)
 
 
 class Lorenz96(DiscreteODE):

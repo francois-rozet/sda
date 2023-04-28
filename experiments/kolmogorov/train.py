@@ -14,8 +14,9 @@ from utils import *
 
 CONFIG = {
     # Architecture
+    'window': 5,
     'embedding': 64,
-    'hidden_channels': (64, 128, 256),
+    'hidden_channels': (96, 192, 384),
     'hidden_blocks': (3, 3, 3),
     'kernel_size': 3,
     'activation': 'SiLU',
@@ -38,12 +39,13 @@ def train(i: int):
     save_config(CONFIG, runpath)
 
     # Network
-    score = make_score(window=3, **CONFIG)
-    sde = VPSDE(score, shape=(6, 64, 64)).cuda()
+    window = CONFIG['window']
+    score = make_score(**CONFIG)
+    sde = VPSDE(score.kernel, shape=(window * 2, 64, 64)).cuda()
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5', window=3)
-    validset = load_data(PATH / 'data/valid.h5', window=3)
+    trainset = load_data(PATH / 'data/train.h5', window=window)
+    validset = load_data(PATH / 'data/valid.h5', window=window)
 
     # Training
     generator = loop(

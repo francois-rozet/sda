@@ -46,7 +46,7 @@ class ScoreNet(nn.Module):
         super().__init__()
 
         self.embedding = TimeEmbedding(embedding)
-        self.network = MLP(features + embedding, features, **kwargs)
+        self.network = ResMLP(features + embedding, features, **kwargs)
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         t = self.embedding(t)

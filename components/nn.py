@@ -5,7 +5,7 @@ import torch.nn as nn
 
 from torch import Tensor
 from typing import *
-from zuko.nn import LayerNorm, MLP
+from zuko.nn import LayerNorm
 
 
 class ResidualBlock(nn.Sequential):
@@ -13,6 +13,62 @@ class ResidualBlock(nn.Sequential):
 
     def forward(self, x: Tensor) -> Tensor:
         return x + super().forward(x)
+
+
+class ContextResidualBlock(nn.Module):
+    r"""Creates a residual block with context."""
+
+    def __init__(self, project: nn.Module, residue: nn.Module):
+        super().__init__()
+
+        self.project = project
+        self.residue = residue
+
+    def forward(self, x: Tensor, y: Tensor) -> Tensor:
+        return x + self.residue(x + self.project(y))
+
+
+class ResMLP(nn.Sequential):
+    r"""Creates a residual multi-layer perceptron (ResMLP).
+
+    Arguments:
+        in_features: The number of input features.
+        out_features: The number of output features.
+        hidden_features: The number of hidden features.
+        activation: The activation function constructor.
+        kwargs: Keyword arguments passed to :class:`nn.Linear`.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        hidden_features: Sequence[int] = (64, 64),
+        activation: Callable[[], nn.Module] = nn.ReLU,
+        **kwargs,
+    ):
+        blocks = []
+
+        for before, after in zip(
+            (in_features, *hidden_features),
+            (*hidden_features, out_features),
+        ):
+            if after != before:
+                blocks.append(nn.Linear(before, after, **kwargs))
+
+            blocks.append(
+                ResidualBlock(
+                    LayerNorm(),
+                    nn.Linear(after, after, **kwargs),
+                    activation(),
+                    nn.Linear(after, after, **kwargs),
+                )
+            )
+
+        super().__init__(*blocks)
+
+        self.in_features = in_features
+        self.out_features = out_features
 
 
 class UNet(nn.Module):
@@ -72,15 +128,18 @@ class UNet(nn.Module):
             padding=[k // 2 for k in kernel_size],
         )
 
-        block = lambda channels: nn.ModuleDict({
-            'project': nn.Linear(context, channels),
-            'residue': nn.Sequential(
+        block = lambda channels: ContextResidualBlock(
+            project=nn.Sequential(
+                nn.Linear(context, channels),
+                nn.Unflatten(-1, (-1,) + (1,) * spatial),
+            ),
+            residue=nn.Sequential(
                 LayerNorm(-(spatial + 1)),
                 convolution(channels, channels, **kwargs),
                 activation(),
                 convolution(channels, channels, **kwargs),
             ),
-        })
+        )
 
         # Layers
         heads, tails = [], []
@@ -120,13 +179,6 @@ class UNet(nn.Module):
         self.descent = nn.ModuleList(descent)
         self.ascent = nn.ModuleList(reversed(ascent))
 
-    def edit(self, block: nn.Module, x: Tensor, y: Tensor) -> Tensor:
-        y = block.project(y)
-        y = y.unflatten(-1, (-1,) + (1,) * self.spatial)
-        x = x + block.residue(x + y)
-
-        return x
-
     def forward(self, x: Tensor, y: Tensor) -> Tensor:
         memory = []
 
@@ -134,7 +186,7 @@ class UNet(nn.Module):
             x = head(x)
 
             for block in blocks:
-                x = self.edit(block, x, y)
+                x = block(x, y)
 
             memory.append(x)
 
@@ -142,7 +194,7 @@ class UNet(nn.Module):
 
         for blocks, tail in zip(self.ascent, self.tails):
             for block in blocks:
-                x = self.edit(block, x, y)
+                x = block(x, y)
 
             if memory:
                 x = tail(x) + memory.pop()

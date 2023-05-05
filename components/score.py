@@ -277,14 +277,54 @@ class SubSubVPSDE(VPSDE):
         return 1 - self.alpha(t) + self.eta
 
 
-class GeneralGaussianScore(nn.Module):
-    r"""Creates a score module for general Gaussian inverse problems.
+class DPSGaussianScore(nn.Module):
+    r"""Creates a score module for Gaussian inverse problems.
 
     .. math:: p(y | x) = N(y | A(x), Σ)
 
     References:
         | Diffusion Posterior Sampling for General Noisy Inverse Problems (Chung et al., 2022)
         | https://arxiv.org/abs/2209.14687
+
+    Note:
+        This module returns :math:`-\sigma(t) s(x(t), t | y)`.
+    """
+
+    def __init__(
+        self,
+        y: Tensor,
+        A: Callable[[Tensor], Tensor],
+        sde: VPSDE,
+        zeta: float = 1.0,
+    ):
+        super().__init__()
+
+        self.register_buffer('y', y)
+
+        self.A = A
+        self.sde = sde
+        self.zeta = zeta
+
+    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+        mu, sigma = self.sde.mu(t), self.sde.sigma(t)
+
+        with torch.enable_grad():
+            x = x.detach().requires_grad_(True)
+
+            eps = self.sde.eps(x, t)
+            x_ = (x - sigma * eps) / mu
+            err = (self.y - self.A(x_)).square().sum()
+
+        s, = torch.autograd.grad(err, x)
+        s = -s * self.zeta / err.sqrt()
+
+        return eps - sigma * s
+
+
+class GaussianScore(nn.Module):
+    r"""Creates a score module for Gaussian inverse problems.
+
+    .. math:: p(y | x) = N(y | A(x), Σ)
 
     Note:
         This module returns :math:`-\sigma(t) s(x(t), t | y)`.

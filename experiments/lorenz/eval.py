@@ -73,7 +73,7 @@ for name, local in [
                 score = MCScoreWrapper(score)
 
             sde = VPSDE(
-                GeneralGaussianScore(
+                GaussianScore(
                     y=y,
                     A=lambda x: x[..., ::step, :1],
                     std=sigma,

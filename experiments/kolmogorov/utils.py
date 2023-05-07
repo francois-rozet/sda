@@ -93,7 +93,13 @@ def vorticity2rgb(
     return w
 
 
-def draw(w: ArrayLike, pad: int = 4, zoom: int = 1, **kwargs) -> Image.Image:
+def draw(
+    w: ArrayLike,
+    mask: ArrayLike = None,
+    pad: int = 4,
+    zoom: int = 1,
+    **kwargs,
+) -> Image.Image:
     w = vorticity2rgb(w, **kwargs)
     m, n, width, height, _ = w.shape
 
@@ -114,6 +120,13 @@ def draw(w: ArrayLike, pad: int = 4, zoom: int = 1, **kwargs) -> Image.Image:
             )
 
             img.paste(Image.fromarray(w[i][j]), offset)
+
+            if mask is not None:
+                img.paste(
+                    Image.new('L', size=(width, height), color=240),
+                    offset,
+                    Image.fromarray(~mask[i][j]),
+                )
 
     if zoom > 1:
         return img.resize((img.width * zoom, img.height * zoom), resample=0)

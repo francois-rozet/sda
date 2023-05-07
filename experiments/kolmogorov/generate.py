@@ -57,6 +57,7 @@ def aggregate():
             )
 
             for i, x in enumerate(map(np.load, files)):
+                x = torch.from_numpy(x)
                 f['x'][i] = KolmogorovFlow.coarsen(x, 4)
 
 

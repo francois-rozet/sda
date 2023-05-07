@@ -4,6 +4,7 @@ import abc
 import jax
 import jax.numpy as jnp
 import jax.random as rng
+import numpy as np
 import math
 import random
 import torch
@@ -294,14 +295,6 @@ class KolmogorovFlow(MarkovChain):
             steps=steps,
         )
 
-        def wrap(uv: jax.Array):
-            return cfd.initial_conditions.wrap_variables(
-                var=tuple(uv),
-                grid=grid,
-                bcs=(bc, bc),
-            )
-
-        @partial(jnp.vectorize, signature='(K)->(C,H,W)')
         def prior(key: rng.PRNGKey) -> jax.Array:
             u, v = cfd.initial_conditions.filtered_velocity_field(
                 key,
@@ -312,50 +305,57 @@ class KolmogorovFlow(MarkovChain):
 
             return jnp.stack((u.data, v.data))
 
-        @partial(jnp.vectorize, signature='(C,H,W)->(C,H,W)')
         def transition(uv: jax.Array) -> jax.Array:
-            u, v = wrap(uv)
+            u, v = cfd.initial_conditions.wrap_variables(
+                var=tuple(uv),
+                grid=grid,
+                bcs=(bc, bc),
+            )
+
             u, v = step((u, v))
 
             return jnp.stack((u.data, v.data))
 
-        @partial(jnp.vectorize, signature='(C,H,W)->(L,C,H,W)', excluded=[1])
-        def trajectory(uv: jax.Array, length: int) -> jax.Array:
-            u, v = wrap(uv)
-            _, (u, v) = cfd.funcutils.trajectory(step, length)((u, v))
+        self._prior = jax.jit(jnp.vectorize(prior, signature='(K)->(C,H,W)'))
+        self._transition = jax.jit(jnp.vectorize(transition, signature='(C,H,W)->(C,H,W)'))
 
-            return jnp.stack((u.data, v.data), axis=1)
-
-        self._prior = jax.jit(prior)
-        self._transition = jax.jit(transition)
-        self._trajectory = jax.jit(trajectory, static_argnums=[1])
-
-    def prior(self, shape: Size = ()) -> jax.Array:
+    def prior(self, shape: Size = ()) -> Tensor:
         seed = random.randrange(2**32)
 
         key = rng.PRNGKey(seed)
         keys = rng.split(key, Size(shape).numel())
         keys = keys.reshape(*shape, -1)
 
-        return self._prior(keys)
+        x = self._prior(keys)
+        x = torch.tensor(np.asarray(x))
 
-    def transition(self, x: jax.Array) -> jax.Array:
-        return self._transition(x)
+        return x
 
-    def trajectory(self, x: jax.Array, length: int, last: bool = False) -> jax.Array:
-        X = self._trajectory(x, length)
+    def transition(self, x: Tensor) -> Tensor:
+        x = x.detach().cpu().numpy()
+        x = self._transition(x)
+        x = torch.tensor(np.asarray(x))
 
-        if last:
-            return X[-1]
-        else:
-            return X
+        return x
 
     @staticmethod
-    def coarsen(x: jax.Array, r: int = 2) -> jax.Array:
+    def coarsen(x: Tensor, r: int = 2) -> Tensor:
         *batch, h, w = x.shape
 
         x = x.reshape(*batch, h // r, r, w // r, r)
-        x = x.mean(axis=(-3, -1))
+        x = x.mean(dim=(-3, -1))
+
+        return x
+
+    @staticmethod
+    def upsample(x: Tensor, r: int = 2) -> Tensor:
+        *batch, h, w = x.shape
+
+        x = x.reshape(-1, 1, h, w)
+        x = torch.nn.functional.pad(x, pad=(1, 1, 1, 1), mode='circular')
+        x = torch.nn.functional.interpolate(x, scale_factor=(r, r), mode='bilinear')
+        x = x[..., r:-r, r:-r]
+        x = x.reshape(*batch, r * h, r * w)
 
         return x
 
@@ -364,7 +364,7 @@ class KolmogorovFlow(MarkovChain):
         *batch, _, h, w = x.shape
 
         y = x.reshape(-1, 2, h, w)
-        y = torch.nn.functional.pad(y, (1, 1, 1, 1), mode='circular')
+        y = torch.nn.functional.pad(y, pad=(1, 1, 1, 1), mode='circular')
 
         du, = torch.gradient(y[:, 0], dim=-1)
         dv, = torch.gradient(y[:, 1], dim=-2)

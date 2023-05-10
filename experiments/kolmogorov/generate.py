@@ -22,7 +22,7 @@ def mkdir():
 @ensure(lambda i: (PATH / f'data/x_{i:06d}.npy').exists())
 @job(array=1024, cpus=1, ram='1GB', time='00:05:00')
 def simulate(i: int):
-    chain = KolmogorovFlow(size=256, dt=0.2)
+    chain = make_chain()
 
     random.seed(i)
 

@@ -19,6 +19,10 @@ else:
 PATH.mkdir(parents=True, exist_ok=True)
 
 
+def make_chain() -> MarkovChain:
+    return NoisyLorenz63(dt=0.025)
+
+
 def make_global_score(
     embedding: int = 32,
     hidden_channels: Sequence[int] = (64,),
@@ -74,7 +78,7 @@ def load_score(
 
 
 def log_prior(x: Tensor) -> Tensor:
-    chain = NoisyLorenz63(dt=0.025)
+    chain = make_chain()
 
     log_p = chain.log_prob(x[..., :-1, :], x[..., 1:, :])
     log_p = log_p.sum(dim=-1)
@@ -104,7 +108,7 @@ def posterior(
     step: int = 1,
     particles: int = 16384,
 ) -> Tensor:
-    chain = NoisyLorenz63(dt=0.025)
+    chain = make_chain()
 
     x = chain.prior((particles,))
     x = chain.trajectory(x, length=64, last=True)

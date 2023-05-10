@@ -40,7 +40,7 @@ for name, local in [
         @context(name=name, local=local, freq=freq)
         @job(name=f'{name}_{freq}', array=64, cpus=2, gpus=1, ram='8GB', time='01:00:00')
         def evaluation(i: int):
-            chain = NoisyLorenz63(dt=0.025)
+            chain = make_chain()
 
             # Observation
             with h5py.File(PATH / 'results/obs.h5', mode='r') as f:

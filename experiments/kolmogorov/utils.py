@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageOps
 from typing import *
 
+from components.mcs import *
 from components.score import *
 from components.utils import *
 
@@ -19,6 +20,10 @@ else:
     PATH = Path('.')
 
 PATH.mkdir(parents=True, exist_ok=True)
+
+
+def make_chain() -> MarkovChain:
+    return KolmogorovFlow(size=256, dt=0.2)
 
 
 class SpecialScoreUNet(ScoreUNet):

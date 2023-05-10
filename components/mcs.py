@@ -348,12 +348,12 @@ class KolmogorovFlow(MarkovChain):
         return x
 
     @staticmethod
-    def upsample(x: Tensor, r: int = 2) -> Tensor:
+    def upsample(x: Tensor, r: int = 2, mode: str = 'bilinear') -> Tensor:
         *batch, h, w = x.shape
 
         x = x.reshape(-1, 1, h, w)
         x = torch.nn.functional.pad(x, pad=(1, 1, 1, 1), mode='circular')
-        x = torch.nn.functional.interpolate(x, scale_factor=(r, r), mode='bilinear')
+        x = torch.nn.functional.interpolate(x, scale_factor=(r, r), mode=mode)
         x = x[..., r:-r, r:-r]
         x = x.reshape(*batch, r * h, r * w)
 

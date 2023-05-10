@@ -17,10 +17,10 @@ def mkdir():
 @after(mkdir)
 @job(cpus=1, ram='1GB', time='00:05:00')
 def simulate():
-    chain = NoisyLorenz63(dt=0.025)
+    chain = make_chain()
 
-    x = chain.prior((4096,))
-    x = chain.trajectory(x, length=2048, last=True)
+    x = chain.prior((1024,))
+    x = chain.trajectory(x, length=1024, last=True)
     x = chain.trajectory(x, length=1024)
     x = chain.preprocess(x)
     x = x.transpose(0, 1)

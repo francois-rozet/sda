@@ -47,7 +47,7 @@ LOCAL_CONFIG = {
 }
 
 
-@job(array=3, cpus=2, ram='8GB', time='12:00:00')
+@job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
 def train_global(i: int):
     run = wandb.init(project='ssm-lorenz', group='global', config=GLOBAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -57,7 +57,7 @@ def train_global(i: int):
 
     # Network
     score = make_global_score(**GLOBAL_CONFIG)
-    sde = VPSDE(score, shape=(3, 32))
+    sde = VPSDE(score, shape=(3, 32)).cuda()
 
     # Data
     trainset = load_data(PATH / 'data/train.h5').unfold(1, 32, 1).flatten(0, 1)
@@ -69,6 +69,7 @@ def train_global(i: int):
         trainset,
         validset,
         **GLOBAL_CONFIG,
+        device='cuda',
     )
 
     for loss_train, loss_valid, lr in generator:
@@ -85,9 +86,9 @@ def train_global(i: int):
     )
 
     # Evaluation
-    chain = NoisyLorenz63(dt=0.025)
+    chain = make_chain()
 
-    x = sde.sample((1024,), steps=64)
+    x = sde.sample((1024,), steps=64).cpu()
     x = x.transpose(-1, -2)
     x = chain.postprocess(x)
 
@@ -97,7 +98,7 @@ def train_global(i: int):
     run.finish()
 
 
-@job(array=3, cpus=2, ram='8GB', time='12:00:00')
+@job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
 def train_local(i: int):
     run = wandb.init(project='ssm-lorenz', group='local', config=LOCAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -108,7 +109,7 @@ def train_local(i: int):
     # Network
     window = LOCAL_CONFIG['window']
     score = make_local_score(**LOCAL_CONFIG)
-    sde = VPSDE(score.kernel, shape=(window * 3,))
+    sde = VPSDE(score.kernel, shape=(window * 3,)).cuda()
 
     # Data
     trainset = load_data(PATH / 'data/train.h5', window=window)
@@ -120,6 +121,7 @@ def train_local(i: int):
         trainset,
         validset,
         **LOCAL_CONFIG,
+        device='cuda',
     )
 
     for loss_train, loss_valid, lr in generator:
@@ -136,9 +138,9 @@ def train_local(i: int):
     )
 
     # Evaluation
-    chain = NoisyLorenz63(dt=0.025)
+    chain = make_chain()
 
-    x = sde.sample((4096,), steps=64)
+    x = sde.sample((4096,), steps=64).cpu()
     x = x.unflatten(-1, (-1, 3))
     x = chain.postprocess(x)
 

@@ -80,6 +80,22 @@ class ScoreUNet(nn.Module):
         return self.network(y, t).reshape(x.shape)
 
 
+class MCScoreWrapper(nn.Module):
+    r"""Disguises a `ScoreUNet` as a score network for a Markov chain."""
+
+    def __init__(self, score: nn.Module):
+        super().__init__()
+
+        self.score = score
+
+    def forward(
+        self,
+        x: Tensor,  # (B, L, C, H, W)
+        t: Tensor,  # ()
+    ) -> Tensor:
+        return self.score(x.transpose(1, 2), t).transpose(1, 2)
+
+
 class MCScoreNet(nn.Module):
     r"""Creates a score network for a Markov chain.
 

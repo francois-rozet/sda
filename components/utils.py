@@ -4,6 +4,7 @@ import h5py
 import json
 import math
 import numpy as np
+import ot
 import random
 import torch
 
@@ -141,3 +142,101 @@ def loop(
 
         ## Step
         scheduler.step()
+
+
+def bpf(
+    x: Tensor,  # (M, *)
+    y: Tensor,  # (N, *)
+    transition: Callable[[Tensor], Tensor],
+    likelihood: Callable[[Tensor, Tensor], Tensor],
+    step: int = 1,
+) -> Tensor:  # (M, N + 1, *)
+    r"""Performs bootstrap particle filter (BPF) sampling
+
+    .. math:: p(x_0, x_1, ..., x_n | y_1, ..., y_n)
+        = p(x_0) \prod_i p(x_i | x_{i-1}) p(y_i | x_i)
+
+    Wikipedia:
+        https://wikipedia.org/wiki/Particle_filter
+
+    Arguments:
+        x: A set of initial states :math:`x_0`.
+        y: The vector of observations :math:`(y_1, ..., y_n)`.
+        transition: The transition function :math:`p(x_i | x_{i-1})`.
+        likelihood: The likelihood function :math:`p(y_i | x_i)`.
+        step: The number of transitions per observation.
+    """
+
+    x = x[:, None]
+
+    for yi in y:
+        for _ in range(step):
+            xi = transition(x[:, -1])
+            x = torch.cat((x, xi[:, None]), dim=1)
+
+        w = likelihood(yi, xi)
+        j = torch.multinomial(w, len(w), replacement=True)
+        x = x[j]
+
+    return x
+
+
+def emd(
+    x: Tensor,  # (M, *)
+    y: Tensor,  # (N, *)
+) -> Tensor:
+    r"""Computes the earth mover's distance (EMD) between two distributions.
+
+    Wikipedia:
+        https://wikipedia.org/wiki/Earth_mover%27s_distance
+
+    Arguments:
+        x: A set of samples :math:`x ~ p(x)`.
+        y: A set of samples :math:`y ~ q(y)`.
+    """
+
+    return ot.emd2(
+        x.new_tensor(()),
+        y.new_tensor(()),
+        torch.cdist(x.flatten(1), y.flatten(1)),
+    )
+
+
+def mmd(
+    x: Tensor,  # (M, *)
+    y: Tensor,  # (N, *)
+) -> Tensor:
+    r"""Computes the empirical maximum mean discrepancy (MMD) between two distributions.
+
+    Wikipedia:
+        https://wikipedia.org/wiki/Kernel_embedding_of_distributions
+
+    Arguments:
+        x: A set of samples :math:`x ~ p(x)`.
+        y: A set of samples :math:`y ~ q(y)`.
+    """
+
+    x = x.flatten(1)
+    y = y.flatten(1)
+
+    xx = x @ x.T
+    yy = y @ y.T
+    xy = x @ y.T
+
+    dxx = xx.diag().unsqueeze(1)
+    dyy = yy.diag().unsqueeze(0)
+
+    err_xx = dxx + dxx.T - 2 * xx
+    err_yy = dyy + dyy.T - 2 * yy
+    err_xy = dxx + dyy - 2 * xy
+
+    mmd = 0
+
+    for sigma in (1e-3, 1e-2, 1e-1, 1e-0, 1e1, 1e2, 1e3):
+        kxx = torch.exp(-err_xx / sigma)
+        kyy = torch.exp(-err_yy / sigma)
+        kxy = torch.exp(-err_xy / sigma)
+
+        mmd = mmd + kxx.mean() + kyy.mean() - 2 * kxy.mean()
+
+    return mmd

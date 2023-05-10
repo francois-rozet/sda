@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from typing import *
 
+from components.mcs import *
 from components.score import *
 from components.utils import *
 
@@ -70,3 +71,71 @@ def load_score(
     score.load_state_dict(state)
 
     return score
+
+
+def log_prior(x: Tensor) -> Tensor:
+    chain = NoisyLorenz63(dt=0.025)
+
+    log_p = chain.log_prob(x[..., :-1, :], x[..., 1:, :])
+    log_p = log_p.sum(dim=-1)
+
+    return log_p
+
+
+def log_likelihood(
+    y: Tensor,
+    x: Tensor,
+    A: Callable[[Tensor], Tensor] = lambda x: x,
+    sigma: float = 1.0,
+    step: int = 1,
+) -> Tensor:
+    x = x[..., ::step, :]
+
+    log_p = Normal(y, sigma).log_prob(A(x))
+    log_p = log_p.sum(dim=(-1, -2))
+
+    return log_p
+
+
+def posterior(
+    y: Tensor,
+    A: Callable[[Tensor], Tensor] = lambda x: x,
+    sigma: float = 1.0,
+    step: int = 1,
+    particles: int = 16384,
+) -> Tensor:
+    chain = NoisyLorenz63(dt=0.025)
+
+    x = chain.prior((particles,))
+    x = chain.trajectory(x, length=64, last=True)
+
+    def likelihood(y, x):
+        w = Normal(y, sigma).log_prob(A(x)).sum(dim=-1)
+        w = torch.softmax(w, 0)
+        return w
+
+    return bpf(x, y, chain.transition, likelihood, step)[:, step:]
+
+
+def weak_4d_var(
+    x: Tensor,
+    y: Tensor,
+    A: Callable[[Tensor], Tensor] = lambda x: x,
+    sigma: float = 1.0,
+    step: int = 1,
+    iterations: int = 16,
+) -> Tensor:
+    x_b = x[0]
+    x = torch.nn.Parameter(x.clone())
+    optimizer = torch.optim.LBFGS((x,))
+
+    def closure():
+        optimizer.zero_grad()
+        loss = (x[0] - x_b).square().sum() - log_prior(x) - log_likelihood(y, x, A, sigma, step)
+        loss.backward()
+        return loss
+
+    for _ in range(iterations):
+        optimizer.step(closure)
+
+    return x.data

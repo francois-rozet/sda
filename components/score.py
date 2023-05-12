@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 from torch import Size, Tensor
+from tqdm import tqdm
 from typing import *
 from zuko.utils import broadcast
 
@@ -229,7 +230,7 @@ class VPSDE(nn.Module):
         dt = 1 / steps
 
         with torch.no_grad():
-            for t in time[:-1]:
+            for t in tqdm(time[:-1]):
                 # Predictor
                 r = self.mu(t - dt) / self.mu(t)
                 x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t)

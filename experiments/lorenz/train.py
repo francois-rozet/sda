@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 
-import json
 import wandb
 
 from dawgz import job, schedule
 from typing import *
 
-from components.mcs import *
-from components.score import *
-from components.utils import *
+from sda.mcs import *
+from sda.score import *
+from sda.utils import *
 
 from utils import *
 
@@ -49,7 +48,7 @@ LOCAL_CONFIG = {
 
 @job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
 def train_global(i: int):
-    run = wandb.init(project='ssm-lorenz', group='global', config=GLOBAL_CONFIG)
+    run = wandb.init(project='sda-lorenz', group='global', config=GLOBAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
@@ -100,7 +99,7 @@ def train_global(i: int):
 
 @job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
 def train_local(i: int):
-    run = wandb.init(project='ssm-lorenz', group='local', config=LOCAL_CONFIG)
+    run = wandb.init(project='sda-lorenz', group='local', config=LOCAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
@@ -158,7 +157,7 @@ if __name__ == '__main__':
         backend='slurm',
         settings={'export': 'ALL'},
         env=[
-            'conda activate ssm',
+            'conda activate sda',
             'export WANDB_SILENT=true',
         ],
     )

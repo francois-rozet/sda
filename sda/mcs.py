@@ -14,7 +14,6 @@ try:
 except:
     pass
 
-from functools import partial
 from torch import Tensor, Size
 from torch.distributions import Normal, MultivariateNormal
 from typing import *

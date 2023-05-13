@@ -3,8 +3,8 @@
 from dawgz import job, after, schedule
 from typing import *
 
-from components.mcs import *
-from components.utils import *
+from sda.mcs import *
+from sda.utils import *
 
 from utils import *
 
@@ -44,5 +44,5 @@ if __name__ == '__main__':
         name='Data generation',
         backend='slurm',
         settings={'export': 'ALL'},
-        env=['conda activate ssm'],
+        env=['conda activate sda'],
     )

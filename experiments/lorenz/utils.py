@@ -5,14 +5,14 @@ import os
 from pathlib import Path
 from typing import *
 
-from components.mcs import *
-from components.score import *
-from components.utils import *
+from sda.mcs import *
+from sda.score import *
+from sda.utils import *
 
 
 if 'SCRATCH' in os.environ:
     SCRATCH = os.environ['SCRATCH']
-    PATH = Path(SCRATCH) / 'ssm/lorenz'
+    PATH = Path(SCRATCH) / 'sda/lorenz'
 else:
     PATH = Path('.')
 

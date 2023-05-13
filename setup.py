@@ -3,7 +3,7 @@
 import setuptools
 
 setuptools.setup(
-    name='components',
+    name='sda',
     version='1.0.0',
     packages=setuptools.find_packages(),
 )

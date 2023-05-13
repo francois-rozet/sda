@@ -5,9 +5,9 @@ import wandb
 from dawgz import job, schedule
 from typing import *
 
-from components.mcs import *
-from components.score import *
-from components.utils import *
+from sda.mcs import *
+from sda.score import *
+from sda.utils import *
 
 from utils import *
 
@@ -32,7 +32,7 @@ CONFIG = {
 
 @job(array=3, cpus=2, gpus=1, ram='16GB', time='24:00:00')
 def train(i: int):
-    run = wandb.init(project='ssm-kolmogorov', config=CONFIG)
+    run = wandb.init(project='sda-kolmogorov', config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
     runpath.mkdir(parents=True, exist_ok=True)
 
@@ -85,7 +85,7 @@ if __name__ == '__main__':
         backend='slurm',
         settings={'export': 'ALL'},
         env=[
-            'conda activate ssm',
+            'conda activate sda',
             'export WANDB_SILENT=true',
         ],
     )

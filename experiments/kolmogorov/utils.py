@@ -91,6 +91,9 @@ def vorticity2rgb(
 ) -> ArrayLike:
     w = np.asarray(w)
     w = (w - vmin) / (vmax - vmin)
+    w = 2 * w - 1
+    w = np.sign(w) * np.abs(w) ** 0.8
+    w = (w + 1) / 2
     w = seaborn.cm.icefire(w)
     w = 256 * w[..., :3]
     w = w.astype(np.uint8)

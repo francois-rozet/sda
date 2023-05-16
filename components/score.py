@@ -337,25 +337,23 @@ class GaussianScore(nn.Module):
         A: Callable[[Tensor], Tensor],
         std: Union[float, Tensor],
         sde: VPSDE,
-        gamma: float = 1e-2,
+        gamma: Union[float, Tensor] = 1e-2,
         detach: bool = False,
     ):
         super().__init__()
 
         self.register_buffer('y', y)
         self.register_buffer('std', torch.as_tensor(std))
+        self.register_buffer('gamma', torch.as_tensor(gamma))
 
         self.A = A
         self.sde = sde
-        self.gamma = gamma
         self.detach = detach
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         mu, sigma = self.sde.mu(t), self.sde.sigma(t)
 
-        if sigma / mu > 2:
-            return self.sde.eps(x, t)
-        elif self.detach:
+        if self.detach:
             eps = self.sde.eps(x, t)
 
         with torch.enable_grad():

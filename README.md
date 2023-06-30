@@ -2,7 +2,7 @@
 
 This repository contains the official implementation of the paper [Score-based Data Assimilation](https://arxiv.org/abs/2306.10574) by [François Rozet](https://github.com/francois-rozet) and [Gilles Louppe](https://github.com/glouppe).
 
-In this work, we built-upon score-based generative modeling to enable inference over state trajectories of dynamical systems given noisy observations. Our method, named score-based data assimilation (SDA), is based on the key insight that the score of an arbitrarily long trajectory can be decomposed into a series of scores over short segments. After training, inference is carried out in a non-autoregressive manner by generating all states simultaneously.
+In this work, we build upon diffusion models to enable inference over state trajectories of large scale dynamical systems (atmospheres, oceans, ...) given noisy state observations. Our method, named score-based data assimilation (SDA), learns a score-based generative model of state trajectories based on the key insight that the score of an arbitrarily long trajectory can be decomposed into a series of scores over short segments. After training, inference is carried out in a non-autoregressive manner by generating all states simultaneously.
 
 <p align="center"><img src="assets/diffusion.svg" width="80%"></p>
 

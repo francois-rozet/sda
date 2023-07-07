@@ -2,7 +2,7 @@ name: sda
 channels:
   - pytorch
   - nvidia
-  - defaults
+  - conda-forge
 dependencies:
   - h5py=3.7.0
   - jupyter=1.0.0

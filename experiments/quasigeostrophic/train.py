@@ -38,7 +38,7 @@ def train(i: int):
 
     # Network
     score = make_score(**CONFIG)
-    sde = VPSDE(score, shape=(13, 4, 128, 128)).cuda()
+    sde = VPSDE(score, shape=(13, 6, 128, 128)).cuda()
 
     # Data
     trainset = RandomCropDataset(PATH / 'data/train.h5', window=13, crop=128, pad=56)
@@ -67,14 +67,13 @@ def train(i: int):
     )
 
     # Evaluation
-    sde = VPSDE(score, shape=(16, 4, 256, 256)).cuda()
+    sde = VPSDE(score, shape=(16, 6, 256, 256)).cuda()
 
     c = trainset.grid.cuda()
     x = sde.sample((2,), c=c, steps=64).cpu()
-    x = x[:, 2::4, :2]
-    w = vorticity(x)
+    q = x[:, ::4, 0]
 
-    run.log({'samples': wandb.Image(draw(w))})
+    run.log({'samples': wandb.Image(draw(q))})
     run.finish()
 
 

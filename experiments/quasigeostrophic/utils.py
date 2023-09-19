@@ -131,7 +131,7 @@ def make_score(
     **absorb,
 ) -> nn.Module:
     return GlobalScoreUNet(
-        channels=4,
+        channels=6,
         context=4,
         embedding=embedding,
         hidden_channels=hidden_channels,
@@ -176,8 +176,8 @@ def vorticity(x: Tensor) -> Tensor:
 
 def vorticity2rgb(
     w: ArrayLike,
-    vmin: float = -1.25,
-    vmax: float = 1.25,
+    vmin: float = -3.0,
+    vmax: float = 3.0,
 ) -> ArrayLike:
     w = np.asarray(w)
     w = (w - vmin) / (vmax - vmin)

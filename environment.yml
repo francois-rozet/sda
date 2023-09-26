@@ -8,9 +8,12 @@ dependencies:
   - jupyter=1.0.0
   - numpy=1.23.5
   - pip=22.3.1
+  - pyfftw=0.12.0
+  - pyqg=0.7.2
   - python=3.9.16
   - pytorch=2.0.1
   - pytorch-cuda=11.7
+  - xarray=2023.8.0
   - pip:
     - dawgz==0.4.1
     - einops==0.6.1

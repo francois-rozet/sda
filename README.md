@@ -12,11 +12,17 @@ Importantly, we decouple the observation model from the training procedure and u
 
 ## Code
 
-The majority of the code is written in [Python](https://www.python.org). Neural networks are built and trained using the [PyTorch](https://pytorch.org/) automatic differentiation framework. We also rely on [JAX](https://github.com/google/jax) and [jax-cfd](https://github.com/google/jax-cfd) to simulate fluid dynamics and on [POT](https://github.com/PythonOT/POT) to compute Wasserstein distances. All dependencies are provided as a [conda](https://conda.io) environment file.
+The majority of the code is written in [Python](https://www.python.org). Neural networks are built and trained using the [PyTorch](https://pytorch.org/) automatic differentiation framework. We also rely on [JAX](https://github.com/google/jax) and [jax-cfd](https://github.com/google/jax-cfd) to simulate fluid dynamics and on [POT](https://github.com/PythonOT/POT) to compute Wasserstein distances. All dependencies except [jax-cfd](https://github.com/google/jax-cfd) are provided as a [conda](https://conda.io) environment file.
 
 ```
 conda env create -f environment.yml
 conda activate sda
+```
+
+We recommend to install [jax-cfd](https://github.com/google/jax-cfd) directly from its repository.
+
+```
+pip install git+https://github.com/google/jax-cfd
 ```
 
 To run the experiments, it is necessary to have access to a [Slurm](https://slurm.schedmd.com/overview.html) cluster, to login to a [Weights & Biases](https://wandb.ai) account and to install the [sda](sda) module as a package.

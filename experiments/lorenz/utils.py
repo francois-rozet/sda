@@ -30,13 +30,15 @@ def make_global_score(
     activation: str = 'SiLU',
     **absorb,
 ) -> nn.Module:
-    return ScoreUNet(
-        channels=3,
-        embedding=embedding,
-        hidden_channels=hidden_channels,
-        hidden_blocks=hidden_blocks,
-        activation=ACTIVATIONS[activation],
-        spatial=1,
+    return MCScoreWrapper(
+        ScoreUNet(
+            channels=3,
+            embedding=embedding,
+            hidden_channels=hidden_channels,
+            hidden_blocks=hidden_blocks,
+            activation=ACTIVATIONS[activation],
+            spatial=1,
+        )
     )
 
 

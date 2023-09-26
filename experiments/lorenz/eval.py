@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
+import h5py
+import numpy as np
+
 from dawgz import job, after, context, ensure, schedule
-from h5py import *
 from typing import *
 
 from sda.mcs import *
@@ -14,12 +16,11 @@ from utils import *
 @ensure(lambda: (PATH / f'results/obs.h5').exists())
 @job(cpus=1, ram='1GB', time='00:05:00')
 def observations():
-    x = load_data(PATH / 'data/test.h5')[:, :65]
+    with h5py.File(PATH / 'data/test.h5', mode='r') as f:
+        x = f['x'][:, :65]
 
-    y_lo = torch.normal(x[:, ::8, :1], 0.05)
-    y_hi = torch.normal(x[:, :, :1], 0.25)
-
-    (PATH / 'results').mkdir(parents=True, exist_ok=True)
+    y_lo = np.random.normal(x[:, ::8, :1], 0.05)
+    y_hi = np.random.normal(x[:, :, :1], 0.25)
 
     with h5py.File(PATH / 'results/obs.h5', mode='w') as f:
         f.create_dataset('lo', data=y_lo)
@@ -68,16 +69,13 @@ for name, local in [
 
             # Score
             score = load_score(PATH / f'runs/{name}/state.pth', local=local)
-
-            if not local:
-                score = MCScoreWrapper(score)
-
             sde = VPSDE(
                 GaussianScore(
                     y=y,
                     A=lambda x: x[..., ::step, :1],
                     std=sigma,
                     sde=VPSDE(score, shape=()),
+                    gamma=3e-2,
                 ),
                 shape=(65, 3),
             ).cuda()
@@ -99,11 +97,12 @@ for name, local in [
 
 
 if __name__ == '__main__':
+    (PATH / 'results').mkdir(parents=True, exist_ok=True)
+
     schedule(
         *jobs,
         name='Evaluation',
         backend='slurm',
         prune=True,
-        settings={'export': 'ALL'},
-        env=['conda activate sda'],
+        export='ALL',
     )

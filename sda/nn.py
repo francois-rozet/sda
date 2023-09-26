@@ -15,8 +15,8 @@ class ResidualBlock(nn.Sequential):
         return x + super().forward(x)
 
 
-class ContextResidualBlock(nn.Module):
-    r"""Creates a residual block with context."""
+class ModResidualBlock(nn.Module):
+    r"""Creates a residual block with modulation."""
 
     def __init__(self, project: nn.Module, residue: nn.Module):
         super().__init__()
@@ -72,7 +72,7 @@ class ResMLP(nn.Sequential):
 
 
 class UNet(nn.Module):
-    r"""Creates a U-Net.
+    r"""Creates a U-Net with modulation.
 
     References:
         | U-Net: Convolutional Networks for Biomedical Image Segmentation (Ronneberger et al., 2015)
@@ -81,7 +81,7 @@ class UNet(nn.Module):
     Arguments:
         in_channels: The number of input channels.
         out_channels: The number of output channels.
-        context: The number of context features.
+        mod_features: The number of modulation features.
         hidden_channels: The number of hidden channels.
         hidden_blocks: The number of hidden blocks at each depth.
         kernel_size: The size of the convolution kernels.
@@ -95,7 +95,7 @@ class UNet(nn.Module):
         self,
         in_channels: int,
         out_channels: int,
-        context: int,
+        mod_features: int,
         hidden_channels: Sequence[int] = (32, 64, 128),
         hidden_blocks: Sequence[int] = (2, 3, 5),
         kernel_size: Union[int, Sequence[int]] = 3,
@@ -128,9 +128,9 @@ class UNet(nn.Module):
             padding=[k // 2 for k in kernel_size],
         )
 
-        block = lambda channels: ContextResidualBlock(
+        block = lambda channels: ModResidualBlock(
             project=nn.Sequential(
-                nn.Linear(context, channels),
+                nn.Linear(mod_features, channels),
                 nn.Unflatten(-1, (-1,) + (1,) * spatial),
             ),
             residue=nn.Sequential(
@@ -148,11 +148,13 @@ class UNet(nn.Module):
         for i, blocks in enumerate(hidden_blocks):
             if i > 0:
                 heads.append(
-                    convolution(
-                        hidden_channels[i - 1],
-                        hidden_channels[i],
-                        stride=stride,
-                        **kwargs,
+                    nn.Sequential(
+                        convolution(
+                            hidden_channels[i - 1],
+                            hidden_channels[i],
+                            stride=stride,
+                            **kwargs,
+                        ),
                     )
                 )
 

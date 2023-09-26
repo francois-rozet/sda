@@ -21,12 +21,12 @@ class TimeEmbedding(nn.Sequential):
 
     def __init__(self, features: int):
         super().__init__(
-            nn.Linear(128, 256),
+            nn.Linear(32, 256),
             nn.SiLU(),
             nn.Linear(256, features),
         )
 
-        self.register_buffer('freqs', torch.pi / 2 * 1e3 ** torch.linspace(0, 1, 64))
+        self.register_buffer('freqs', torch.pi * torch.arange(1, 16 + 1))
 
     def forward(self, t: Tensor) -> Tensor:
         t = self.freqs * t.unsqueeze(dim=-1)
@@ -40,19 +40,25 @@ class ScoreNet(nn.Module):
 
     Arguments:
         features: The number of features.
+        context: The number of context features.
         embedding: The number of time embedding features.
     """
 
-    def __init__(self, features: int, embedding: int = 16, **kwargs):
+    def __init__(self, features: int, context: int = 0, embedding: int = 16, **kwargs):
         super().__init__()
 
         self.embedding = TimeEmbedding(embedding)
-        self.network = ResMLP(features + embedding, features, **kwargs)
+        self.network = ResMLP(features + context + embedding, features, **kwargs)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor, c: Tensor = None) -> Tensor:
         t = self.embedding(t)
-        x, t = broadcast(x, t, ignore=1)
-        x = torch.cat((x, t), dim=-1)
+
+        if c is None:
+            x, t = broadcast(x, t, ignore=1)
+            x = torch.cat((x, t), dim=-1)
+        else:
+            x, t, c = broadcast(x, t, c, ignore=1)
+            x = torch.cat((x, t, c), dim=-1)
 
         return self.network(x)
 
@@ -62,19 +68,25 @@ class ScoreUNet(nn.Module):
 
     Arguments:
         channels: The number of channels.
+        context: The number of context channels.
         embedding: The number of time embedding features.
     """
 
-    def __init__(self, channels: int, embedding: int = 64, **kwargs):
+    def __init__(self, channels: int, context: int = 0, embedding: int = 64, **kwargs):
         super().__init__()
 
         self.embedding = TimeEmbedding(embedding)
-        self.network = UNet(channels, channels, embedding, **kwargs)
+        self.network = UNet(channels + context, channels, embedding, **kwargs)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor, c: Tensor = None) -> Tensor:
         dims = self.network.spatial + 1
 
-        y = x.reshape(-1, *x.shape[-dims:])
+        if c is None:
+            y = x
+        else:
+            y = torch.cat(broadcast(x, c, ignore=dims), dim=-dims)
+
+        y = y.reshape(-1, *y.shape[-dims:])
         t = t.reshape(-1)
         t = self.embedding(t)
 
@@ -93,8 +105,9 @@ class MCScoreWrapper(nn.Module):
         self,
         x: Tensor,  # (B, L, C, H, W)
         t: Tensor,  # ()
+        c: Tensor = None,  # TODO
     ) -> Tensor:
-        return self.score(x.transpose(1, 2), t).transpose(1, 2)
+        return self.score(x.transpose(1, 2), t, c).transpose(1, 2)
 
 
 class MCScoreNet(nn.Module):
@@ -102,10 +115,11 @@ class MCScoreNet(nn.Module):
 
     Arguments:
         features: The number of features.
+        context: The number of context features.
         order: The order of the Markov chain.
     """
 
-    def __init__(self, features: int, order: int = 1, **kwargs):
+    def __init__(self, features: int, context: int = 0, order: int = 1, **kwargs):
         super().__init__()
 
         self.order = order
@@ -115,15 +129,16 @@ class MCScoreNet(nn.Module):
         else:
             build = ScoreNet
 
-        self.kernel = build(features * (2 * order + 1), **kwargs)
+        self.kernel = build(features * (2 * order + 1), context, **kwargs)
 
     def forward(
         self,
         x: Tensor,  # (B, L, C, H, W)
         t: Tensor,  # ()
+        c: Tensor = None,  # (C', H, W)
     ) -> Tensor:
         x = self.unfold(x, self.order)
-        s = self.kernel(x, t)
+        s = self.kernel(x, t, c)
         s = self.fold(s, self.order)
 
         return s
@@ -210,6 +225,7 @@ class VPSDE(nn.Module):
     def sample(
         self,
         shape: Size = (),
+        c: Tensor = None,
         steps: int = 64,
         corrections: int = 0,
         tau: float = 1.0,
@@ -218,6 +234,7 @@ class VPSDE(nn.Module):
 
         Arguments:
             shape: The batch shape.
+            c: The optional context.
             steps: The number of discrete time steps.
             corrections: The number of Langevin corrections per time steps.
             tau: The amplitude of Langevin steps.
@@ -230,28 +247,33 @@ class VPSDE(nn.Module):
         dt = 1 / steps
 
         with torch.no_grad():
-            for t in tqdm(time[:-1]):
+            for t in tqdm(time[:-1], ncols=88):
                 # Predictor
                 r = self.mu(t - dt) / self.mu(t)
-                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t)
+                x = r * x + (self.sigma(t - dt) - r * self.sigma(t)) * self.eps(x, t, c)
 
                 # Corrector
                 for _ in range(corrections):
                     eps = torch.randn_like(x)
-                    s = -self.eps(x, t - dt) / self.sigma(t - dt)
+                    s = -self.eps(x, t - dt, c) / self.sigma(t - dt)
                     delta = tau / s.square().mean(dim=self.dims, keepdim=True)
 
                     x = x + delta * s + torch.sqrt(2 * delta) * eps
 
         return x.reshape(shape + self.shape)
 
-    def loss(self, x: Tensor) -> Tensor:
+    def loss(self, x: Tensor, c: Tensor = None, w: Tensor = None) -> Tensor:
         r"""Returns the denoising loss."""
 
         t = torch.rand(x.shape[0], dtype=x.dtype, device=x.device)
         x, eps = self.forward(x, t, train=True)
 
-        return (self.eps(x, t) - eps).square().mean()
+        err = (self.eps(x, t, c) - eps).square()
+
+        if w is None:
+            return err.mean()
+        else:
+            return (err * w).mean() / w.mean()
 
 
 class SubVPSDE(VPSDE):
@@ -350,17 +372,17 @@ class GaussianScore(nn.Module):
         self.sde = sde
         self.detach = detach
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
+    def forward(self, x: Tensor, t: Tensor, c: Tensor = None) -> Tensor:
         mu, sigma = self.sde.mu(t), self.sde.sigma(t)
 
         if self.detach:
-            eps = self.sde.eps(x, t)
+            eps = self.sde.eps(x, t, c)
 
         with torch.enable_grad():
             x = x.detach().requires_grad_(True)
 
             if not self.detach:
-                eps = self.sde.eps(x, t)
+                eps = self.sde.eps(x, t, c)
 
             x_ = (x - sigma * eps) / mu
 

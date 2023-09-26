@@ -7,18 +7,11 @@ import random
 from dawgz import job, after, ensure, schedule
 from typing import *
 
-from sda.mcs import *
-from sda.utils import *
+from sda.mcs import KolmogorovFlow
 
 from utils import *
 
 
-@job(cpus=1, time='00:01:00')
-def mkdir():
-    (PATH / 'data').mkdir(parents=True, exist_ok=True)
-
-
-@after(mkdir)
 @ensure(lambda i: (PATH / f'data/x_{i:06d}.npy').exists())
 @job(array=1024, cpus=1, ram='1GB', time='00:05:00')
 def simulate(i: int):
@@ -36,7 +29,7 @@ def simulate(i: int):
 @after(simulate)
 @job(cpus=1, ram='1GB', time='00:15:00')
 def aggregate():
-    files = list(PATH.glob('data/x_*.npy'))
+    files = sorted(PATH.glob('data/x_*.npy'))
     length = len(files)
 
     i = int(0.8 * length)
@@ -57,16 +50,16 @@ def aggregate():
             )
 
             for i, x in enumerate(map(np.load, files)):
-                x = torch.from_numpy(x)
-                f['x'][i] = KolmogorovFlow.coarsen(x, 4)
+                f['x'][i] = KolmogorovFlow.coarsen(torch.from_numpy(x), 4)
 
 
 if __name__ == '__main__':
+    (PATH / 'data').mkdir(parents=True, exist_ok=True)
+
     schedule(
         aggregate,
         name='Data generation',
         backend='slurm',
         prune=True,
-        settings={'export': 'ALL'},
-        env=['conda activate sda'],
+        export='ALL',
     )

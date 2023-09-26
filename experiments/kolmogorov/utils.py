@@ -26,7 +26,7 @@ def make_chain() -> MarkovChain:
     return KolmogorovFlow(size=256, dt=0.2)
 
 
-class SpecialScoreUNet(ScoreUNet):
+class LocalScoreUNet(ScoreUNet):
     r"""Creates a score U-Net with a forcing channel."""
 
     def __init__(
@@ -35,18 +35,15 @@ class SpecialScoreUNet(ScoreUNet):
         size: int = 64,
         **kwargs,
     ):
-        super().__init__(channels + 1, **kwargs)
+        super().__init__(channels, 1, **kwargs)
 
         domain = 2 * torch.pi / size * (torch.arange(size) + 1 / 2)
         forcing = torch.sin(4 * domain).expand(1, size, size).clone()
 
         self.register_buffer('forcing', forcing)
 
-    def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        x, f = broadcast(x, self.forcing, ignore=3)
-        x = torch.cat((x, f), dim=-3)
-
-        return super().forward(x, t)[..., :-1, :, :]
+    def forward(self, x: Tensor, t: Tensor, c: Tensor = None) -> Tensor:
+        return super().forward(x, t, self.forcing)
 
 
 def make_score(
@@ -59,7 +56,7 @@ def make_score(
     **absorb,
 ) -> nn.Module:
     score = MCScoreNet(2, order=window // 2)
-    score.kernel = SpecialScoreUNet(
+    score.kernel = LocalScoreUNet(
         channels=window * 2,
         embedding=embedding,
         hidden_channels=hidden_channels,
@@ -109,29 +106,35 @@ def draw(
     **kwargs,
 ) -> Image.Image:
     w = vorticity2rgb(w, **kwargs)
-    m, n, width, height, _ = w.shape
+    w = w[(None,) * (5 - w.ndim)]
+
+    M, N, H, W, _ = w.shape
+
+    if mask is not None:
+        mask = np.asarray(mask, dtype=bool)
+        mask = mask[(None,) * (4 - mask.ndim)]
 
     img = Image.new(
         'RGB',
         size=(
-            n * (width + pad) + pad,
-            m * (height + pad) + pad
+            N * (W + pad) + pad,
+            M * (H + pad) + pad,
         ),
         color=(255, 255, 255),
     )
 
-    for i in range(m):
-        for j in range(n):
+    for i in range(M):
+        for j in range(N):
             offset = (
-                j * (width + pad) + pad,
-                i * (height + pad) + pad,
+                j * (W + pad) + pad,
+                i * (H + pad) + pad,
             )
 
             img.paste(Image.fromarray(w[i][j]), offset)
 
             if mask is not None:
                 img.paste(
-                    Image.new('L', size=(width, height), color=240),
+                    Image.new('L', size=(W, H), color=240),
                     offset,
                     Image.fromarray(~mask[i][j]),
                 )
@@ -150,7 +153,7 @@ def sandwich(
     **kwargs,
 ):
     w = vorticity2rgb(w, **kwargs)
-    n, width, height, _ = w.shape
+    N, H, W, _ = w.shape
 
     if mirror:
         w = w[:, :, ::-1]
@@ -158,15 +161,15 @@ def sandwich(
     img = Image.new(
         'RGB',
         size=(
-            width + (n - 1) * offset,
-            height + (n - 1) * offset,
+            W + (N - 1) * offset,
+            H + (N - 1) * offset,
         ),
         color=(255, 255, 255),
     )
 
     draw = ImageDraw.Draw(img)
 
-    for i in range(n):
+    for i in range(N):
         draw.rectangle(
             (i * offset - border, i * offset - border, img.width, img.height),
             (255, 255, 255),

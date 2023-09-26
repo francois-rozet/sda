@@ -21,7 +21,7 @@ CONFIG = {
     'kernel_size': 3,
     'activation': 'SiLU',
     # Training
-    'epochs': 1024,
+    'epochs': 4096,
     'batch_size': 32,
     'optimizer': 'AdamW',
     'learning_rate': 2e-4,
@@ -30,7 +30,7 @@ CONFIG = {
 }
 
 
-@job(array=3, cpus=2, gpus=1, ram='16GB', time='24:00:00')
+@job(array=3, cpus=4, gpus=1, ram='16GB', time='24:00:00')
 def train(i: int):
     run = wandb.init(project='sda-kolmogorov', config=CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -44,8 +44,8 @@ def train(i: int):
     sde = VPSDE(score.kernel, shape=(window * 2, 64, 64)).cuda()
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5', window=window)
-    validset = load_data(PATH / 'data/valid.h5', window=window)
+    trainset = TrajectoryDataset(PATH / 'data/train.h5', window=window, flatten=True)
+    validset = TrajectoryDataset(PATH / 'data/valid.h5', window=window, flatten=True)
 
     # Training
     generator = loop(
@@ -83,9 +83,6 @@ if __name__ == '__main__':
         train,
         name='Training',
         backend='slurm',
-        settings={'export': 'ALL'},
-        env=[
-            'conda activate sda',
-            'export WANDB_SILENT=true',
-        ],
+        export='ALL',
+        env=['export WANDB_SILENT=true'],
     )

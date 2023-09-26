@@ -3,13 +3,13 @@ r"""Helpers"""
 import h5py
 import json
 import math
-import numpy as np
 import ot
 import random
 import torch
 
 from pathlib import Path
 from torch import Tensor
+from torch.utils.data import Dataset, DataLoader
 from tqdm import trange
 from typing import *
 
@@ -42,36 +42,55 @@ def load_config(path: Path) -> Dict[str, Any]:
         return json.load(f)
 
 
-def save_data(x: Tensor, file: Path) -> None:
-    with h5py.File(file, mode='w') as f:
-        f.create_dataset('x', data=x, dtype=np.float32)
-
-
-def load_data(file: Path, window: int = None) -> Tensor:
-    with h5py.File(file, mode='r') as f:
-        data = f['x'][:]
-
-    data = torch.from_numpy(data)
-
-    if window is None:
-        pass
-    elif window == 1:
-        data = data.flatten(0, 1)
+def to(x: Any, **kwargs) -> Any:
+    if torch.is_tensor(x):
+        return x.to(**kwargs)
+    elif type(x) is list:
+        return [to(y, **kwargs) for y in x]
+    elif type(x) is tuple:
+        return tuple(to(y, **kwargs) for y in x)
+    elif type(x) is dict:
+        return {k: to(v, **kwargs) for k, v in x.items()}
     else:
-        data = data.unfold(1, window, 1)
-        data = data.movedim(-1, 2)
-        data = data.flatten(2, 3)
-        data = data.flatten(0, 1)
+        return x
 
-    return data
+
+class TrajectoryDataset(Dataset):
+    def __init__(
+        self,
+        file: Path,
+        window: int = None,
+        flatten: bool = False,
+    ):
+        super().__init__()
+
+        with h5py.File(file, mode='r') as f:
+            self.data = f['x'][:]
+
+        self.window = window
+        self.flatten = flatten
+
+    def __len__(self) -> int:
+        return len(self.data)
+
+    def __getitem__(self, i: int) -> Tuple[Tensor, Dict]:
+        x = torch.from_numpy(self.data[i])
+
+        if self.window is not None:
+            i = torch.randint(0, len(x) - self.window + 1, size=())
+            x = torch.narrow(x, dim=0, start=i, length=self.window)
+
+        if self.flatten:
+            return x.flatten(0, 1), {}
+        else:
+            return x, {}
 
 
 def loop(
     sde: VPSDE,
-    trainset: Tensor,
-    validset: Tensor,
+    trainset: Dataset,
+    validset: Dataset,
     epochs: int = 256,
-    epoch_size: int = 4096,
     batch_size: int = 64,
     optimizer: str = 'AdamW',
     learning_rate: float = 1e-3,
@@ -80,6 +99,10 @@ def loop(
     device: str = 'cpu',
     **absorb,
 ) -> Iterator:
+    # Data
+    trainloader = DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=1, persistent_workers=True)
+    validloader = DataLoader(validset, batch_size=batch_size, shuffle=True, num_workers=1, persistent_workers=True)
+
     # Optimizer
     if optimizer == 'AdamW':
         optimizer = torch.optim.AdamW(
@@ -110,26 +133,24 @@ def loop(
         ## Train
         sde.train()
 
-        i = torch.randint(len(trainset), (epoch_size,))
-        subset = trainset[i].to(device)
+        for batch in trainloader:
+            x, kwargs = to(batch, device=device)
 
-        for x in subset.split(batch_size):
-            optimizer.zero_grad()
-            l = sde.loss(x)
+            l = sde.loss(x, **kwargs)
             l.backward()
+
             optimizer.step()
+            optimizer.zero_grad()
 
             losses_train.append(l.detach())
 
         ## Valid
         sde.eval()
 
-        i = torch.randint(len(validset), (epoch_size,))
-        subset = validset[i].to(device)
-
         with torch.no_grad():
-            for x in subset.split(batch_size):
-                losses_valid.append(sde.loss(x))
+            for batch in validloader:
+                x, kwargs = to(batch, device=device)
+                losses_valid.append(sde.loss(x, **kwargs))
 
         ## Stats
         loss_train = torch.stack(losses_train).mean().item()

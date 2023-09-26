@@ -19,8 +19,7 @@ GLOBAL_CONFIG = {
     'hidden_blocks': (3,),
     'activation': 'SiLU',
     # Training
-    'epochs': 1024,
-    'epoch_size': 16384,
+    'epochs': 4096,
     'batch_size': 64,
     'optimizer': 'AdamW',
     'learning_rate': 1e-3,
@@ -36,9 +35,8 @@ LOCAL_CONFIG = {
     'depth': 5,
     'activation': 'SiLU',
     # Training
-    'epochs': 1024,
-    'epoch_size': 65536,
-    'batch_size': 256,
+    'epochs': 4096,
+    'batch_size': 64,
     'optimizer': 'AdamW',
     'learning_rate': 1e-3,
     'weight_decay': 1e-3,
@@ -46,7 +44,7 @@ LOCAL_CONFIG = {
 }
 
 
-@job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
+@job(array=3, cpus=4, gpus=1, ram='8GB', time='06:00:00')
 def train_global(i: int):
     run = wandb.init(project='sda-lorenz', group='global', config=GLOBAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -56,11 +54,11 @@ def train_global(i: int):
 
     # Network
     score = make_global_score(**GLOBAL_CONFIG)
-    sde = VPSDE(score, shape=(3, 32)).cuda()
+    sde = VPSDE(score, shape=(32, 3)).cuda()
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5').unfold(1, 32, 1).flatten(0, 1)
-    validset = load_data(PATH / 'data/valid.h5').unfold(1, 32, 1).flatten(0, 1)
+    trainset = TrajectoryDataset(PATH / 'data/train.h5', window=32)
+    validset = TrajectoryDataset(PATH / 'data/valid.h5', window=32)
 
     # Training
     generator = loop(
@@ -88,7 +86,6 @@ def train_global(i: int):
     chain = make_chain()
 
     x = sde.sample((1024,), steps=64).cpu()
-    x = x.transpose(-1, -2)
     x = chain.postprocess(x)
 
     log_p = chain.log_prob(x[:, :-1], x[:, 1:]).mean()
@@ -97,7 +94,7 @@ def train_global(i: int):
     run.finish()
 
 
-@job(array=3, cpus=2, gpus=1, ram='8GB', time='06:00:00')
+@job(array=3, cpus=4, gpus=1, ram='8GB', time='06:00:00')
 def train_local(i: int):
     run = wandb.init(project='sda-lorenz', group='local', config=LOCAL_CONFIG)
     runpath = PATH / f'runs/{run.name}_{run.id}'
@@ -111,8 +108,8 @@ def train_local(i: int):
     sde = VPSDE(score.kernel, shape=(window * 3,)).cuda()
 
     # Data
-    trainset = load_data(PATH / 'data/train.h5', window=window)
-    validset = load_data(PATH / 'data/valid.h5', window=window)
+    trainset = TrajectoryDataset(PATH / 'data/train.h5', window=window, flatten=True)
+    validset = TrajectoryDataset(PATH / 'data/valid.h5', window=window, flatten=True)
 
     # Training
     generator = loop(
@@ -155,9 +152,6 @@ if __name__ == '__main__':
         train_local,
         name='Training',
         backend='slurm',
-        settings={'export': 'ALL'},
-        env=[
-            'conda activate sda',
-            'export WANDB_SILENT=true',
-        ],
+        export='ALL',
+        env=['export WANDB_SILENT=true'],
     )

@@ -1,20 +1,13 @@
 #!/usr/bin/env python
 
+import h5py
+
 from dawgz import job, after, schedule
 from typing import *
-
-from sda.mcs import *
-from sda.utils import *
 
 from utils import *
 
 
-@job(cpus=1, time='00:01:00')
-def mkdir():
-    (PATH / 'data').mkdir(parents=True, exist_ok=True)
-
-
-@after(mkdir)
 @job(cpus=1, ram='1GB', time='00:05:00')
 def simulate():
     chain = make_chain()
@@ -35,14 +28,16 @@ def simulate():
     }
 
     for name, x in splits.items():
-        save_data(x, PATH / f'data/{name}.h5')
+        with h5py.File(PATH / f'data/{name}.h5', mode='w') as f:
+            f.create_dataset('x', data=x, dtype=np.float32)
 
 
 if __name__ == '__main__':
+    (PATH / 'data').mkdir(parents=True, exist_ok=True)
+
     schedule(
         simulate,
         name='Data generation',
         backend='slurm',
-        settings={'export': 'ALL'},
-        env=['conda activate sda'],
+        export='ALL',
     )

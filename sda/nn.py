@@ -8,6 +8,65 @@ from typing import *
 from zuko.nn import LayerNorm
 
 
+class CheckpointFunction(torch.autograd.Function):
+    r"""Gradient checkpointing function."""
+
+    @staticmethod
+    def setup_context(ctx, args: Tuple, output: Any):
+        f, x, *phi = args
+
+        ctx.f = f
+        ctx.save_for_backward(x, *phi)
+
+    @staticmethod
+    def forward(f: Callable[[Tensor], Tensor], x: Tensor, *phi: Tensor):
+        with torch.no_grad():
+            return f(x)
+
+    @staticmethod
+    def backward(ctx, grad_y: Tensor) -> Tuple[Tensor, ...]:
+        f = ctx.f
+        x, *phi = ctx.saved_tensors
+
+        with torch.enable_grad():
+            y = f(x)
+
+        grad_x, *grad_phi = torch.autograd.grad(
+            y,
+            (x, *phi),
+            grad_y,
+            allow_unused=True,
+        )
+
+        return None, grad_x, *grad_phi
+
+    @staticmethod
+    def vmap(info: Any, in_dims: Tuple, *args):
+        _, dim, *_ = in_dims
+
+        f, x, *phi = args
+        f = torch.vmap(f, in_dims=dim, out_dims=dim)
+
+        return CheckpointFunction.apply(f, x, *phi), dim
+
+
+class Checkpoint(nn.Module):
+    r"""Gradient checkpointing module."""
+
+    def __init__(self, f: nn.Module):
+        super().__init__()
+
+        self.f = f
+
+    def __repr__(self) -> str:
+        return repr(self.f)
+
+    def forward(self, x: Tensor) -> Tensor:
+        phi = filter(lambda p: p.requires_grad, self.parameters())
+
+        return CheckpointFunction.apply(self.f, x, *phi)
+
+
 class ResidualBlock(nn.Sequential):
     r"""Creates a residual block."""
 
@@ -133,11 +192,13 @@ class UNet(nn.Module):
                 nn.Linear(mod_features, channels),
                 nn.Unflatten(-1, (-1,) + (1,) * spatial),
             ),
-            residue=nn.Sequential(
-                LayerNorm(-(spatial + 1)),
-                convolution(channels, channels, **kwargs),
-                activation(),
-                convolution(channels, channels, **kwargs),
+            residue=Checkpoint(
+                nn.Sequential(
+                    LayerNorm(-(spatial + 1)),
+                    convolution(channels, 4 * channels, **kwargs),
+                    activation(),
+                    convolution(4 * channels, channels, kernel_size=1, padding=0),
+                )
             ),
         )
 

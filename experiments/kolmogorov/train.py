@@ -16,7 +16,7 @@ CONFIG = {
     # Architecture
     'window': 5,
     'embedding': 64,
-    'hidden_channels': (96, 192, 384),
+    'hidden_channels': (64, 128, 256),
     'hidden_blocks': (3, 3, 3),
     'kernel_size': 3,
     'activation': 'SiLU',

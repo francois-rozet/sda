@@ -15,7 +15,7 @@ from utils import *
 GLOBAL_CONFIG = {
     # Architecture
     'embedding': 32,
-    'hidden_channels': (64,),
+    'hidden_channels': (32,),
     'hidden_blocks': (3,),
     'activation': 'SiLU',
     # Training

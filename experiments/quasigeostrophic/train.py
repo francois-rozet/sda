@@ -14,13 +14,13 @@ from utils import *
 CONFIG = {
     # Architecture
     'embedding': 64,
-    'hidden_channels': (16, 32, 64, 128),
-    'hidden_blocks': (5, 3, 2, 1),
-    'kernel_size': 3,
+    'hidden_channels': (16, 32, 64),
+    'hidden_blocks': (3, 3, 3),
+    'kernel_size': 5,
     'activation': 'SiLU',
     # Training
     'epochs': 1024,
-    'batch_size': 8,
+    'batch_size': 4,
     'optimizer': 'AdamW',
     'learning_rate': 2e-4,
     'weight_decay': 1e-3,
@@ -38,11 +38,11 @@ def train(i: int):
 
     # Network
     score = make_score(**CONFIG)
-    sde = VPSDE(score, shape=(13, 6, 128, 128)).cuda()
+    sde = VPSDE(score, shape=(9, 6, 256, 256)).cuda()
 
     # Data
-    trainset = RandomCropDataset(PATH / 'data/train.h5', window=13, crop=128, pad=56)
-    validset = RandomCropDataset(PATH / 'data/valid.h5', window=13, crop=128, pad=56)
+    trainset = RandomCropDataset(PATH / 'data/train.h5', window=9)
+    validset = RandomCropDataset(PATH / 'data/valid.h5', window=9)
 
     # Training
     generator = loop(
@@ -67,8 +67,6 @@ def train(i: int):
     )
 
     # Evaluation
-    sde = VPSDE(score, shape=(16, 6, 256, 256)).cuda()
-
     c = trainset.grid.cuda()
     x = sde.sample((2,), c=c, steps=64).cpu()
     q = x[:, ::4, 0]

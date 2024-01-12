@@ -254,11 +254,11 @@ class VPSDE(nn.Module):
 
                 # Corrector
                 for _ in range(corrections):
-                    eps = torch.randn_like(x)
-                    s = -self.eps(x, t - dt, c) / self.sigma(t - dt)
-                    delta = tau / s.square().mean(dim=self.dims, keepdim=True)
+                    z = torch.randn_like(x)
+                    eps = self.eps(x, t - dt, c)
+                    delta = tau / eps.square().mean(dim=self.dims, keepdim=True)
 
-                    x = x + delta * s + torch.sqrt(2 * delta) * eps
+                    x = x - (delta * eps + torch.sqrt(2 * delta) * z) * self.sigma(t - dt)
 
         return x.reshape(shape + self.shape)
 

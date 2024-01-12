@@ -37,15 +37,26 @@ The [sda](sda) directory contains the implementations of the [dynamical systems]
 
 The [lorenz](experiments/lorenz) and [kolmogorov](experiments/kolmogorov) directories contain the scripts for the experiments (data generation, training and evaluation) as well as the notebooks that produced the figures of the paper.
 
+> The code for [Score-based Data Assimilation for a Two-Layer Quasi-Geostrophic Model](https://arxiv.org/abs/2310.01853) can be found in the `qg` branch.
+
 ## Citation
 
 If you find this code useful for your research, please consider citing
 
 ```bib
-@unpublished{rozet2023scorebased,
-    title={Score-based Data Assimilation},
-    author={François Rozet and Gilles Louppe},
-    year={2023},
-    url={https://arxiv.org/abs/2306.10574},
+@inproceedings{rozet2023sda,
+  title={Score-based Data Assimilation},
+  author={Fran{\c{c}}ois Rozet and Gilles Louppe},
+  booktitle={Thirty-seventh Conference on Neural Information Processing Systems},
+  year={2023},
+  url={https://openreview.net/forum?id=VUvLSnMZdX},
+}
+
+@article{rozet2023sda-2lqg,
+  title={Score-based Data Assimilation for a Two-Layer Quasi-Geostrophic Model},
+  author={Fran{\c{c}}ois Rozet and Gilles Louppe},
+  booktitle={Machine Learning and the Physical Sciences Workshop (NeurIPS)},
+  year={2023},
+  url={https://arxiv.org/abs/2310.01853},
 }
 ```
